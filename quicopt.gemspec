@@ -21,11 +21,17 @@ Gem::Specification.new do |spec|
   spec.metadata["rubygems_mfa_required"] = "true"
 
   # Ship the library, the vendored wire contract, and the licence/readme — but
-  # not the dev-only scaffolding (tests, the codec generator, bin/).
+  # not the dev-only scaffolding (tests, the codec generator, bin/, CI config).
+  #
+  # `.yardopts` and `templates/` are deliberately kept: RubyDoc.info builds a
+  # published gem's documentation from what is inside the gem, so shipping them
+  # is what lets the hosted docs pick up the same configuration and theming as
+  # the site this repo deploys.
   gemspec = File.basename(__FILE__)
   spec.files = IO.popen(%w[git ls-files -z], chdir: __dir__, err: IO::NULL) do |ls|
     ls.readlines("\x0", chomp: true).reject do |f|
-      (f == gemspec) || f.start_with?(*%w[bin/ gen/ test/ Gemfile Rakefile .gitignore])
+      (f == gemspec) ||
+        f.start_with?(*%w[bin/ gen/ test/ .github/ Gemfile Rakefile .gitignore])
     end
   end
   spec.require_paths = ["lib"]

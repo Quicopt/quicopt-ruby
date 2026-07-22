@@ -1,5 +1,6 @@
 --readme README.md
 --output-dir doc
+--template-path templates
 --no-private
 --hide-void-return
 --exclude lib/quicopt/modeler

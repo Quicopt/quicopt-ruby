@@ -1,0 +1,275 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: (c) 2026 Tim Bode, PGI-12, Forschungszentrum Jülich
+ *
+ * Quicopt theming for YARD's default template.
+ *
+ * YARD ships css/common.css as an explicit override hook ("Override this file
+ * with custom rules") and loads it *after* style.css — so equal-specificity
+ * rules here win without needing !important. It is also listed in
+ * stylesheets_full_list, meaning it is loaded into the class-list iframe as
+ * well; one file therefore themes the whole site, sidebar included. That is
+ * what makes dark mode possible at all: without it the iframe would stay a
+ * white panel beside a dark page.
+ *
+ * Palette matches the Python client's docs site (#2d5faa, logo grey #333333),
+ * with the blue lifted in dark mode for contrast against a dark background.
+ */
+
+:root {
+  --qc-blue: #2d5faa;
+  --qc-blue-hover: #24487f;
+  --qc-grey: #333333;
+
+  --qc-bg: #ffffff;
+  --qc-fg: #2b2b2b;
+  --qc-muted: #6a737d;
+  --qc-border: #e1e4e8;
+  --qc-code-bg: #f6f8fa;
+  --qc-panel-bg: #f7f8fa;
+  --qc-mark: url(quicopt-icon-color.svg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --qc-blue: #6ea3e0;
+    --qc-blue-hover: #93bcea;
+
+    --qc-bg: #14171c;
+    --qc-fg: #d7dde5;
+    --qc-muted: #8b97a6;
+    --qc-border: #2a3038;
+    --qc-code-bg: #1b1f26;
+    --qc-panel-bg: #1a1e25;
+    --qc-mark: url(quicopt-icon-white.svg);
+  }
+}
+
+/* ── base ────────────────────────────────────────────────────────────────── */
+
+body,
+body.yard,
+#main {
+  background: var(--qc-bg);
+  color: var(--qc-fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+#content {
+  background: var(--qc-bg);
+  color: var(--qc-fg);
+}
+
+a,
+a:visited,
+#content a,
+#content a:visited {
+  color: var(--qc-blue);
+  text-decoration: none;
+}
+
+a:hover,
+#content a:hover {
+  color: var(--qc-blue-hover);
+  text-decoration: underline;
+}
+
+h1, h2, h3, h4, h5, h6,
+#content h1, #content h2, #content h3, #content h4 {
+  color: var(--qc-fg);
+  border-color: var(--qc-border);
+}
+
+/* YARD renders section rules as bordered headings; keep them subtle. */
+#content h2 {
+  border-bottom: 1px solid var(--qc-border);
+  padding-bottom: 0.2em;
+}
+
+hr,
+#content hr {
+  border: 0;
+  border-top: 1px solid var(--qc-border);
+}
+
+/* ── header, with the brand mark ─────────────────────────────────────────── */
+
+#main > #header {
+  position: relative;
+  background: var(--qc-panel-bg);
+  border-bottom: 1px solid var(--qc-border);
+  padding: 0.6em 0.9em 0.6em 3.2em;
+}
+
+#main > #header::before {
+  content: "";
+  position: absolute;
+  left: 0.95em;
+  top: 50%;
+  width: 1.6em;
+  height: 1.6em;
+  transform: translateY(-50%);
+  background: var(--qc-mark) no-repeat center / contain;
+}
+
+#header #menu,
+#header #menu .title,
+#header #menu a {
+  color: var(--qc-muted);
+}
+
+#header #menu a {
+  color: var(--qc-blue);
+}
+
+/* The hamburger that opens the class list is an inline SVG with no fill set. */
+#header #search svg rect {
+  fill: var(--qc-muted);
+}
+
+/* ── sidebar (its own iframe document) ───────────────────────────────────── */
+
+.nav_wrap,
+#nav {
+  border-right: 1px solid var(--qc-border);
+  background: var(--qc-panel-bg);
+}
+
+#resizer {
+  background: var(--qc-border);
+}
+
+body.full_list,
+#full_list {
+  background: var(--qc-panel-bg);
+  color: var(--qc-fg);
+}
+
+#full_list li,
+#full_list ul li {
+  border-color: var(--qc-border);
+}
+
+#full_list li:hover,
+#full_list li.collapsed:hover {
+  background: var(--qc-code-bg);
+}
+
+#full_list .item:hover {
+  background: transparent;
+}
+
+#search input,
+#full_list_nav a,
+.fixed_header {
+  background: var(--qc-panel-bg);
+  color: var(--qc-fg);
+  border-color: var(--qc-border);
+}
+
+#search input {
+  border: 1px solid var(--qc-border);
+  border-radius: 3px;
+  padding: 0.25em 0.4em;
+}
+
+/* ── code ────────────────────────────────────────────────────────────────── */
+
+code, tt, pre,
+#content code, #content tt, #content pre {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+#content code,
+#content tt {
+  background: var(--qc-code-bg);
+  color: var(--qc-fg);
+  border: 1px solid var(--qc-border);
+  border-radius: 3px;
+  padding: 0.05em 0.3em;
+}
+
+#content pre,
+#content .source_code,
+.source_code .lines {
+  background: var(--qc-code-bg);
+  color: var(--qc-fg);
+  border: 1px solid var(--qc-border);
+  border-radius: 4px;
+}
+
+/* A code span inside a pre block must not get its own box. */
+#content pre code,
+#content pre tt {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+.source_code .lines {
+  color: var(--qc-muted);
+}
+
+/* ── docstring blocks, tags, tables ──────────────────────────────────────── */
+
+.docstring .note,
+.docstring .todo,
+.docstring .deprecated,
+.docstring .examples .example {
+  border-left: 4px solid var(--qc-blue);
+  background: var(--qc-code-bg);
+  color: var(--qc-fg);
+}
+
+.tags .overload .overload_item,
+.method_details,
+.method_details_list {
+  border-color: var(--qc-border);
+}
+
+.tags ul li,
+.tags h3 {
+  color: var(--qc-fg);
+}
+
+.summary_signature,
+.method_details h3.signature {
+  background: var(--qc-code-bg);
+  border: 1px solid var(--qc-border);
+  border-radius: 3px;
+  color: var(--qc-fg);
+}
+
+.summary_signature a,
+.method_details h3.signature a {
+  color: var(--qc-blue);
+}
+
+table,
+#content table {
+  border-color: var(--qc-border);
+  color: var(--qc-fg);
+}
+
+#content table th,
+#content table td {
+  border: 1px solid var(--qc-border);
+  padding: 0.35em 0.6em;
+}
+
+#content table th {
+  background: var(--qc-code-bg);
+}
+
+/* ── footer ──────────────────────────────────────────────────────────────── */
+
+#footer {
+  background: var(--qc-panel-bg);
+  border-top: 1px solid var(--qc-border);
+  color: var(--qc-muted);
+}
+
+#footer a {
+  color: var(--qc-blue);
+}
