@@ -1,0 +1,12 @@
+/.bundle/
+/.yardoc/
+/_yardoc/
+/coverage/
+/doc/
+/pkg/
+/tmp/
+Gemfile.lock
+*.gem
+
+# Internal working document — must never reach the public repo or its history.
+SPEC.md
