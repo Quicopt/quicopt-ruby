@@ -4,21 +4,25 @@
  * Quicopt theming for YARD's default template.
  *
  * YARD ships css/common.css as an explicit override hook ("Override this file
- * with custom rules") and loads it *after* style.css — so equal-specificity
- * rules here win without needing !important. It is also listed in
- * stylesheets_full_list, meaning it is loaded into the class-list iframe as
- * well; one file therefore themes the whole site, sidebar included. That is
- * what makes dark mode possible at all: without it the iframe would stay a
- * white panel beside a dark page.
+ * with custom rules") and loads it *after* style.css — so matching a YARD
+ * selector exactly is enough to win, and no !important is needed anywhere. It is
+ * also listed in stylesheets_full_list, so it loads into the class-list iframe
+ * too; one file themes the whole site, sidebar included.
+ *
+ * The rules below deliberately reuse YARD's own selectors rather than inventing
+ * shorter ones. That is not verbosity: `#filecontents pre.code` out-specifies a
+ * reasonable-looking `#content pre`, so a shorter selector silently loses on
+ * exactly the elements that matter most. Everything is driven by the variables
+ * below, which is what lets dark mode be a palette swap instead of a second
+ * stylesheet.
  *
  * Palette matches the Python client's docs site (#2d5faa, logo grey #333333),
- * with the blue lifted in dark mode for contrast against a dark background.
+ * with the blue lifted in dark mode for contrast.
  */
 
 :root {
   --qc-blue: #2d5faa;
   --qc-blue-hover: #24487f;
-  --qc-grey: #333333;
 
   --qc-bg: #ffffff;
   --qc-fg: #2b2b2b;
@@ -26,7 +30,25 @@
   --qc-border: #e1e4e8;
   --qc-code-bg: #f6f8fa;
   --qc-panel-bg: #f7f8fa;
+  --qc-stripe: #f0f2f4;
+  --qc-hover: #eef2f7;
   --qc-mark: url(quicopt-icon-color.svg);
+
+  /* Syntax tokens. YARD's defaults are tuned for white; dark needs its own. */
+  --qc-tok-keyword: #0000ff;
+  --qc-tok-string: #036a07;
+  --qc-tok-comment: #6a737d;
+  --qc-tok-const: #585cf6;
+  --qc-tok-method: #0085ff;
+  --qc-tok-ivar: #318495;
+  --qc-tok-symbol: #c5060b;
+
+  /* Semantic notes keep their meaning in both modes rather than flattening to
+     grey: amber warns, red deprecates. */
+  --qc-warn-bg: #fffbe6;
+  --qc-warn-border: #e6d27a;
+  --qc-danger-bg: #ffe5e5;
+  --qc-danger-border: #e6a1a1;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -40,36 +62,47 @@
     --qc-border: #2a3038;
     --qc-code-bg: #1b1f26;
     --qc-panel-bg: #1a1e25;
+    --qc-stripe: #191d24;
+    --qc-hover: #232933;
     --qc-mark: url(quicopt-icon-white.svg);
+
+    --qc-tok-keyword: #c792ea;
+    --qc-tok-string: #a5e075;
+    --qc-tok-comment: #7f8b99;
+    --qc-tok-const: #82aaff;
+    --qc-tok-method: #82aaff;
+    --qc-tok-ivar: #7fdbca;
+    --qc-tok-symbol: #f78c6c;
+
+    --qc-warn-bg: #33301d;
+    --qc-warn-border: #5c5231;
+    --qc-danger-bg: #33211f;
+    --qc-danger-border: #5f3736;
   }
 }
 
 /* ── base ────────────────────────────────────────────────────────────────── */
 
 body,
-body.yard,
-#main {
+#main,
+#content {
   background: var(--qc-bg);
   color: var(--qc-fg);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
 }
 
-#content {
-  background: var(--qc-bg);
-  color: var(--qc-fg);
-}
-
-a,
-a:visited,
-#content a,
-#content a:visited {
+a, a:visited,
+#content a, #content a:visited {
   color: var(--qc-blue);
   text-decoration: none;
 }
 
+/* YARD paints a yellow highlight behind hovered links; keep the emphasis but
+   drop the highlighter-pen look, which is unreadable on a dark background. */
 a:hover,
 #content a:hover {
+  background: transparent;
   color: var(--qc-blue-hover);
   text-decoration: underline;
 }
@@ -80,14 +113,7 @@ h1, h2, h3, h4, h5, h6,
   border-color: var(--qc-border);
 }
 
-/* YARD renders section rules as bordered headings; keep them subtle. */
-#content h2 {
-  border-bottom: 1px solid var(--qc-border);
-  padding-bottom: 0.2em;
-}
-
-hr,
-#content hr {
+hr, #content hr {
   border: 0;
   border-top: 1px solid var(--qc-border);
 }
@@ -113,8 +139,7 @@ hr,
 }
 
 #header #menu,
-#header #menu .title,
-#header #menu a {
+#header #menu .title {
   color: var(--qc-muted);
 }
 
@@ -122,55 +147,98 @@ hr,
   color: var(--qc-blue);
 }
 
-/* The hamburger that opens the class list is an inline SVG with no fill set. */
 #header #search svg rect {
   fill: var(--qc-muted);
 }
 
-/* ── sidebar (its own iframe document) ───────────────────────────────────── */
+#header #search a,
+#header #search a:hover {
+  background: var(--qc-code-bg);
+  border: 1px solid var(--qc-border);
+  color: var(--qc-blue);
+}
+
+/* ── sidebar: its own iframe document, themed by this same file ──────────── */
 
 .nav_wrap,
 #nav {
-  border-right: 1px solid var(--qc-border);
   background: var(--qc-panel-bg);
+  border-right: 1px solid var(--qc-border);
 }
 
 #resizer {
   background: var(--qc-border);
 }
 
-body.full_list,
 #full_list {
   background: var(--qc-panel-bg);
   color: var(--qc-fg);
 }
 
+.fixed_header {
+  background: var(--qc-panel-bg);
+  border-bottom: 1px solid var(--qc-border);
+  color: var(--qc-fg);
+}
+
+#noresults {
+  background: var(--qc-panel-bg);
+  color: var(--qc-muted);
+}
+
+/* Zebra striping — the rows that stayed white while everything else went dark. */
+#full_list li.odd,
+li.r1 {
+  background: var(--qc-stripe);
+}
+
+#full_list li.even,
+li.r2 {
+  background: var(--qc-panel-bg);
+}
+
 #full_list li,
 #full_list ul li {
   border-color: var(--qc-border);
-}
-
-#full_list li:hover,
-#full_list li.collapsed:hover {
-  background: var(--qc-code-bg);
+  color: var(--qc-fg);
 }
 
 #full_list .item:hover {
-  background: transparent;
+  background: var(--qc-hover);
 }
 
 #search input,
-#full_list_nav a,
-.fixed_header {
-  background: var(--qc-panel-bg);
+#full_list_nav a {
+  background: var(--qc-bg);
   color: var(--qc-fg);
-  border-color: var(--qc-border);
-}
-
-#search input {
   border: 1px solid var(--qc-border);
   border-radius: 3px;
-  padding: 0.25em 0.4em;
+}
+
+#full_list_nav a {
+  border: 0;
+  background: transparent;
+  color: var(--qc-blue);
+}
+
+/* ── table of contents ───────────────────────────────────────────────────── */
+
+#toc,
+#toc.hidden,
+#toc.hidden:hover {
+  background: var(--qc-panel-bg);
+  border: 1px solid var(--qc-border);
+  box-shadow: none;
+  color: var(--qc-fg);
+}
+
+#toc .title,
+#toc li {
+  color: var(--qc-fg);
+}
+
+#toc a {
+  color: var(--qc-blue);
 }
 
 /* ── code ────────────────────────────────────────────────────────────────── */
@@ -181,6 +249,10 @@ code, tt, pre,
     "Liberation Mono", monospace;
 }
 
+/* Inline code. YARD gives `.docstring p > code` a pink tint; normalise it. */
+*:not(pre) > code,
+.docstring p > code,
+.docstring p > tt,
 #content code,
 #content tt {
   background: var(--qc-code-bg);
@@ -190,49 +262,115 @@ code, tt, pre,
   padding: 0.05em 0.3em;
 }
 
-#content pre,
-#content .source_code,
-.source_code .lines {
+/* Block code. These three selectors are YARD's own — a shorter one loses to
+   `#filecontents pre.code`, which is what left these boxes white in dark mode
+   while the text had already gone light. */
+.docstring pre.code,
+#filecontents pre.code,
+.tags pre.example,
+.source_code,
+.source_code pre {
   background: var(--qc-code-bg);
-  color: var(--qc-fg);
   border: 1px solid var(--qc-border);
   border-radius: 4px;
+  color: var(--qc-fg);
 }
 
-/* A code span inside a pre block must not get its own box. */
+.source_code {
+  border-left: 8px solid var(--qc-border);
+}
+
+pre.code,
+pre.code a {
+  color: var(--qc-fg);
+}
+
+pre.code a {
+  border-bottom: 1px dotted var(--qc-border);
+}
+
+/* A code span nested in a block must not get its own box. */
 #content pre code,
-#content pre tt {
+#content pre tt,
+pre.code code,
+pre.code tt {
   background: none;
   border: 0;
   padding: 0;
 }
 
-.source_code .lines {
+.source_code .lines,
+pre.code .info.file {
   color: var(--qc-muted);
 }
 
-/* ── docstring blocks, tags, tables ──────────────────────────────────────── */
+/* Syntax tokens — YARD hard-codes these for a white background. */
+pre.code .kw { color: var(--qc-tok-keyword); }
+pre.code .val,
+pre.code .tstring_content,
+pre.code .tstring_beg,
+pre.code .tstring_end,
+pre.code .dstring,
+pre.code .regexp { color: var(--qc-tok-string); }
+pre.code .comment { color: var(--qc-tok-comment); font-style: italic; }
+pre.code .const,
+pre.code .constant { color: var(--qc-tok-const); }
+pre.code .fid,
+pre.code .id,
+pre.code .rubyid_new { color: var(--qc-tok-method); }
+pre.code .ivar { color: var(--qc-tok-ivar); }
+pre.code .gvar,
+pre.code .label,
+pre.code .symbol { color: var(--qc-tok-symbol); }
+pre.code .int,
+pre.code .float { color: var(--qc-tok-const); }
+
+/* YARD also colours a handful of specific method names and the cross-reference
+   links inside code, each hard-coded for a white background. */
+pre.code .rubyid_to_i,
+pre.code .rubyid_each,
+pre.code .rubyid_include,
+pre.code .id > .object_link a { color: var(--qc-tok-method); }
+pre.code .rubyid_nth_ref { color: var(--qc-tok-symbol); }
+pre.code .const > .object_link a,
+#content .summary_desc pre.code .const > .object_link a { color: var(--qc-tok-const); }
+
+/* ── docstring furniture ─────────────────────────────────────────────────── */
 
 .docstring .note,
-.docstring .todo,
-.docstring .deprecated,
-.docstring .examples .example {
-  border-left: 4px solid var(--qc-blue);
+.note.title,
+.note.returns_void {
   background: var(--qc-code-bg);
+  border-left: 4px solid var(--qc-blue);
   color: var(--qc-fg);
 }
 
-.tags .overload .overload_item,
-.method_details,
-.method_details_list {
+.docstring dl dt,
+.box_info dl:nth-child(odd) > *,
+.docstring table tr:nth-child(odd) {
+  background: var(--qc-stripe);
+  color: var(--qc-fg);
+}
+
+.box_info dl:nth-child(even) > *,
+.docstring table tr:nth-child(even),
+.docstring table th {
+  background: var(--qc-panel-bg);
+  color: var(--qc-fg);
+}
+
+.docstring table,
+.docstring table th,
+.docstring table td,
+#content table,
+#content table th,
+#content table td {
   border-color: var(--qc-border);
-}
-
-.tags ul li,
-.tags h3 {
   color: var(--qc-fg);
 }
 
+p.signature,
+.tags .overload .overload_item .signature,
 .summary_signature,
 .method_details h3.signature {
   background: var(--qc-code-bg);
@@ -242,24 +380,28 @@ code, tt, pre,
 }
 
 .summary_signature a,
-.method_details h3.signature a {
+.method_details h3.signature a,
+.summary_desc .object_link a {
+  background: transparent;
   color: var(--qc-blue);
 }
 
-table,
-#content table {
-  border-color: var(--qc-border);
-  color: var(--qc-fg);
-}
-
-#content table th,
-#content table td {
-  border: 1px solid var(--qc-border);
-  padding: 0.35em 0.6em;
-}
-
-#content table th {
+.inheritanceTree,
+h2 small a {
   background: var(--qc-code-bg);
+  color: var(--qc-blue);
+  border-color: var(--qc-border);
+}
+
+.tags .overload .overload_item,
+.method_details,
+.method_details_list {
+  border-color: var(--qc-border);
+}
+
+.tags h3,
+.tags ul li {
+  color: var(--qc-fg);
 }
 
 /* ── footer ──────────────────────────────────────────────────────────────── */
@@ -272,4 +414,61 @@ table,
 
 #footer a {
   color: var(--qc-blue);
+}
+
+/* ── the remaining light surfaces ────────────────────────────────────────── */
+
+/* Inline code inside tag sections (@param, @return, @raise …). */
+.tags p > code,
+.tags p > tt {
+  background: var(--qc-code-bg);
+  color: var(--qc-fg);
+  border: 1px solid var(--qc-border);
+  border-radius: 3px;
+  padding: 0.05em 0.3em;
+}
+
+/* Cross-reference links carry a pale blue plate; the underline is enough. */
+.docstring .object_link a,
+.toggleDefines {
+  background: transparent;
+  color: var(--qc-blue);
+}
+
+/* Tables in the README (rendered into #filecontents, not .docstring). */
+#filecontents table tr:nth-child(odd) {
+  background: var(--qc-stripe);
+}
+
+#filecontents table tr:nth-child(even) {
+  background: var(--qc-panel-bg);
+}
+
+#filecontents table th,
+#filecontents dt {
+  background: var(--qc-panel-bg);
+  color: var(--qc-fg);
+}
+
+#filecontents table,
+#filecontents table th,
+#filecontents table td {
+  border-color: var(--qc-border);
+}
+
+/* Semantic notes: amber warns, red deprecates — in both modes. */
+.note.todo,
+.note.private,
+.note.title.private {
+  background: var(--qc-warn-bg);
+  border-left: 4px solid var(--qc-warn-border);
+  color: var(--qc-fg);
+}
+
+.note.deprecated,
+.note.title.deprecated,
+.summary_signature.deprecated {
+  background: var(--qc-danger-bg);
+  border-left: 4px solid var(--qc-danger-border);
+  color: var(--qc-fg);
 }
