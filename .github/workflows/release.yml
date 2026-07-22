@@ -1,20 +1,27 @@
 # SPDX-License-Identifier: Apache-2.0
-# Build and publish the `quicopt` gem to RubyGems via Trusted Publishing (OIDC) —
-# no long-lived API token, and it sidesteps the MFA-vs-CI problem.
+# Publish the `quicopt` gem to RubyGems via Trusted Publishing (OIDC) — no
+# long-lived API token, and it sidesteps the MFA-vs-CI problem.
 #
 # Set the trusted publisher up once on rubygems.org (gem → Trusted Publishers)
 # with this repository, the workflow filename `release.yml`, and the environment
-# `rubygems` below; only then will a release actually push.
+# `rubygems` below. For a gem that does not exist yet, register it as a *pending*
+# trusted publisher; the first successful run then creates the gem.
 #
-# A version bump is inert until a GitHub Release is tagged, and a published
-# version can never be re-pushed (`gem yank` does not free the number) — so don't
-# tag until the version is one you are willing to live with.
+# Release flow: bump lib/quicopt/version.rb, land it on main, then run this
+# workflow by hand. `rubygems/release-gem` runs `bundle exec rake release`, which
+# builds the gem, creates and pushes the `v<version>` tag, and pushes to
+# RubyGems. Note the direction — the tag is an *output* of the release, not the
+# trigger for it, so do not tag beforehand.
+#
+# A published version can never be re-pushed (`gem yank` does not free the
+# number), so only dispatch this on a version you are willing to live with.
 name: Publish to RubyGems
 
+# Manual only, deliberately. The obvious trigger — `release: [published]` —
+# cannot work with this action: publishing a GitHub Release creates the tag
+# first, and `rake release` then aborts with "Tag v… has already been created".
 on:
-  release:
-    types: [published]   # publishing a GitHub release triggers a real push
-  workflow_dispatch:     # manual trigger, for the first release
+  workflow_dispatch:
 
 jobs:
   test:
@@ -38,9 +45,13 @@ jobs:
     environment: rubygems
     permissions:
       id-token: write    # the OIDC token RubyGems Trusted Publishing verifies — no secrets
-      contents: read
+      contents: write    # `rake release` pushes the version tag back to this repo
     steps:
+      # persist-credentials: false — the action installs its own git credentials
+      # for the tag push, and checkout's stored token would otherwise win.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.4"
