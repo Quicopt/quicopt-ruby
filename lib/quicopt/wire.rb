@@ -27,6 +27,8 @@ require_relative "modeler/v1/program_pb"
 # to the service's reference codec, not byte-identical — the same position the
 # Julia client is in. Compare decoded +Program+ values in tests, never hex.
 module Quicopt
+  # Node constructors over the generated codec, and the lowering from the DSL's
+  # normalised polynomials into the IR's expression trees.
   module Wire
     # The generated wire schema — +Program+, +Expression+, +Constraint+, … — as
     # the client's IR. Aliased for brevity throughout the codec.

@@ -125,6 +125,7 @@ module Quicopt
       "DELETE" => Net::HTTP::Delete
     }.freeze
 
+    # The content type of a request body: the wire bytes are opaque binary.
     OCTET_STREAM = "application/octet-stream"
 
     # @return [String] the service base URL, without a trailing slash
@@ -495,6 +496,7 @@ module Quicopt
       nil
     end
 
+    # @return [String] the job id, tagged with the class
     def inspect
       "#<Quicopt::Job #{@job_id}>"
     end

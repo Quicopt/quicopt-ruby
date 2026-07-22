@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# Build the YARD API reference and deploy it to GitHub Pages.
+# Enable once in the repo settings: Settings → Pages → Source = "GitHub Actions".
+#
+# Note that this is *not* the only place the docs appear: RubyDoc.info builds and
+# hosts YARD docs for every published gem automatically, from the `.yardopts` in
+# the gem itself. This workflow exists so the docs also track `main` between
+# releases, and live on a URL we control.
+name: docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a newer run supersede an in-flight one; never cancel a live deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      # --fail-on-warning keeps a broken cross-reference from shipping silently;
+      # the coverage gate keeps the reference from quietly rotting as code lands.
+      - run: bundle exec yard doc --fail-on-warning
+      - name: Require full documentation coverage
+        run: |
+          undocumented=$(bundle exec yard stats --list-undoc | grep -c '^Quicopt' || true)
+          if [ "$undocumented" -ne 0 ]; then
+            echo "::error::$undocumented undocumented objects"
+            bundle exec yard stats --list-undoc
+            exit 1
+          fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: doc
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

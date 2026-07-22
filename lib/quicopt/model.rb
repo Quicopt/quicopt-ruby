@@ -205,14 +205,17 @@ module Quicopt
       equal?(other)
     end
 
+    # Hashes by identity, to match +eql?+.
     def hash
       object_id.hash
     end
 
+    # @return [String] the variable's wire name
     def to_s
       @name
     end
 
+    # @return [String] name, domain and bounds
     def inspect
       "#<Quicopt::Variable #{@name} #{@domain} [#{@lower}, #{@upper}]>"
     end
@@ -332,6 +335,7 @@ module Quicopt
       seen
     end
 
+    # Renders the polynomial, e.g. +3*x + 2*y - 4+.
     def to_s
       terms = []
       terms << Format.number(@constant) unless @constant.zero?
@@ -342,6 +346,7 @@ module Quicopt
       terms.join(" + ").gsub(" + -", " - ")
     end
 
+    # @return [String] the polynomial, tagged with the class
     def inspect
       "#<Quicopt::Expression #{self}>"
     end
@@ -389,6 +394,7 @@ module Quicopt
   # terms) and the numeric +bound+ (the constant, moved to the other side), which
   # is the shape the wire's function-in-set rows take.
   class Constraint
+    # The comparison operator each sense renders as.
     SENSES = { le: "<=", ge: ">=", eq: "==" }.freeze
 
     # @return [Expression] the residual +lhs - rhs+
@@ -423,10 +429,12 @@ module Quicopt
       -@expr.constant
     end
 
+    # Renders the row as +body <op> bound+.
     def to_s
       "#{body} #{SENSES[@sense]} #{Format.number(bound)}"
     end
 
+    # @return [String] the row, tagged with the class
     def inspect
       "#<Quicopt::Constraint #{self}>"
     end
@@ -544,6 +552,7 @@ module Quicopt
       Wire.encode(self)
     end
 
+    # Renders the whole model: objective, rows, then declarations.
     def to_s
       lines = ["#{@sense} #{@objective}"]
       lines << "subject to" unless @constraints.empty?
@@ -554,6 +563,7 @@ module Quicopt
       lines.join("\n")
     end
 
+    # @return [String] a one-line summary: variable and row counts
     def inspect
       "#<Quicopt::Model #{@variables.size} vars, #{@constraints.size} constraints>"
     end
