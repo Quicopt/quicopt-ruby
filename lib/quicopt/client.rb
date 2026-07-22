@@ -4,6 +4,7 @@
 
 require "json"
 require "net/http"
+require "pathname"
 require "stringio"
 require "uri"
 require "zlib"
@@ -15,8 +16,10 @@ require "zlib"
 # +google-protobuf+. The request body is the versioned wire bytes; the response is
 # the service's result JSON (+status+ / +objective+ / +solution+ / a
 # ready-to-print +display+ / …). The first keyless call mints an API key, returned
-# in the +X-Quicopt-Api-Key+ response header and remembered on the +Client+ so
-# later calls replay it as +Authorization: Bearer+.
+# in the +X-Quicopt-Api-Key+ response header; it is cached at
+# +$XDG_CACHE_HOME/quicopt/free_key+ and replayed as +Authorization: Bearer+ on
+# every later call — including from a later *process*, so one caller keeps one key
+# rather than minting a fresh one per run.
 #
 # Two entry points mirror the two service endpoints:
 #
@@ -97,16 +100,23 @@ module Quicopt
     end
   end
 
+  # Environment variable overriding where the free key is cached. Point it at
+  # durable storage in an environment whose home directory does not survive the
+  # run (CI, containers), where the default location is wiped between sessions
+  # and every run would otherwise mint a fresh key.
+  KEY_PATH_ENV = "QUICOPT_KEY_PATH"
+
   # A connection to a Quicopt service at +base_url+ — the public free tier
   # (+DEFAULT_BASE_URL+) unless another URL is given.
   #
   # The client holds the API key: pass a known one, or let the first keyless call
-  # mint one and read it back from +api_key+ to persist it yourself.
+  # mint one — which is then cached on disk and reused by later runs, so one
+  # caller keeps one key.
   #
   #   client = Quicopt::Client.new
   #   result = client.solve(model)
   #   puts result.display
-  #   client.api_key   # => the key the first call minted
+  #   client.api_key   # => the key the first call minted (and cached)
   class Client
     # The HTTP methods this client issues, and the request class for each.
     REQUESTS = {
@@ -123,17 +133,32 @@ module Quicopt
     attr_accessor :api_key
     # @return [Float] the per-request socket timeout, in seconds
     attr_accessor :timeout
+    # @return [Pathname] where the free key is cached
+    attr_reader :key_path
 
     # Bind a client to a service endpoint.
     #
     # @param base_url [String] the service base URL; a trailing slash is stripped
-    # @param api_key [String, nil] a known API key, or +nil+ to let the first
-    #   keyless call mint one
+    # @param api_key [String, nil] a known API key, or +nil+ to reuse the cached
+    #   free key (minting one on the first keyless call). A key passed here is
+    #   used as-is and never written to the cache, so authenticating with a key
+    #   you already hold cannot clobber the free key of whoever runs the code.
     # @param timeout [Numeric] the per-request socket timeout, in seconds
-    def initialize(base_url = DEFAULT_BASE_URL, api_key = nil, timeout: 60.0)
+    # @param key_path [String, Pathname, nil] where to cache the free key;
+    #   defaults to +Client.default_key_path+
+    # @param cache [Boolean] +false+ keeps the key in memory only, neither
+    #   reading nor writing the cache file
+    def initialize(base_url = DEFAULT_BASE_URL, api_key = nil, timeout: 60.0,
+                   key_path: nil, cache: true)
       @base_url = base_url.to_s.sub(%r{/+\z}, "")
-      @api_key = api_key
       @timeout = timeout
+      @key_path = Pathname(key_path || Client.default_key_path).expand_path
+      @cache = cache
+      @explicit = !api_key.nil?
+      @api_key = @explicit ? api_key : (cache ? Client.read_key(@key_path) : nil)
+      # Only a key that came off disk may be discarded and re-minted on a 401 —
+      # see +request_raw+, which relies on this to bound re-minting to one per run.
+      @from_cache = !@api_key.nil? && !@explicit
     end
 
     # Solve +model+ synchronously, blocking until the result returns.
@@ -164,7 +189,32 @@ module Quicopt
     def submit(model, project: nil, config: nil, gzip: false)
       body = request("POST", "/v1/jobs", to_wire(model),
                      config: meta_config(model, project, config), gzip: gzip)
+      remember(body["api_key"]) # /v1/jobs echoes a minted key in the 202 body too
       Job.new(self, body["job_id"])
+    end
+
+    # Perform one HTTP request, retrying once if a *cached* key is rejected.
+    #
+    # A cache file can outlive the key it holds (the server was reset, the key
+    # was revoked, the file was copied from another machine), and a stale key
+    # 401s every call forever. So a 401 discards the cached key and retries
+    # once, keyless — which mints a fresh key and caches it.
+    #
+    # The retry is deliberately narrow: only a key read from disk is discarded,
+    # never one minted in this process and never a caller-supplied +api_key+. A
+    # run can therefore mint at most one key beyond the stale one, so a server
+    # that rejected a key it just issued can never turn into a mint loop.
+    #
+    # @return [String] the raw response body
+    # @raise [QuicoptError] on a non-2xx response
+    # @api private
+    def request_raw(method, path, data = nil, config: nil, gzip: false)
+      attempt(method, path, data, config: config, gzip: gzip)
+    rescue QuicoptError => e
+      raise unless e.status_code == 401 && @from_cache
+
+      discard_key
+      attempt(method, path, data, config: config, gzip: gzip)
     end
 
     # Perform one HTTP request and return the raw response body.
@@ -177,7 +227,7 @@ module Quicopt
     # @return [String] the raw response body
     # @raise [QuicoptError] on a non-2xx response
     # @api private
-    def request_raw(method, path, data = nil, config: nil, gzip: false)
+    def attempt(method, path, data = nil, config: nil, gzip: false)
       uri = URI.parse(@base_url + path + Client.query(config))
       request_class = REQUESTS.fetch(method) { raise ArgumentError, "unsupported method #{method}" }
       req = request_class.new(uri)
@@ -262,6 +312,50 @@ module Quicopt
       { "error" => text }
     end
 
+    # The default location of the cached free key:
+    # +$XDG_CACHE_HOME/quicopt/free_key+, falling back to +~/.cache+ when the
+    # variable is unset, unless +KEY_PATH_ENV+ overrides the whole path.
+    #
+    # @return [Pathname]
+    def self.default_key_path
+      override = ENV[KEY_PATH_ENV]
+      return Pathname(override) unless override.nil? || override.empty?
+
+      root = ENV["XDG_CACHE_HOME"]
+      root = File.join(Dir.home, ".cache") if root.nil? || root.empty?
+      Pathname(root) + "quicopt" + "free_key"
+    end
+
+    # Read the cached key. A missing or unreadable cache is not an error — it
+    # just means this caller has no key yet and the next call mints one.
+    #
+    # @return [String, nil] the cached key, or +nil+ if absent/unreadable/empty
+    def self.read_key(path)
+      key = path.read.strip
+      key.empty? ? nil : key
+    rescue SystemCallError, IOError
+      nil
+    end
+
+    # Persist +key+ at +path+, atomically and readable only by its owner.
+    #
+    # The key is a credential, so the file is +0600+; the write goes to a temp
+    # file in the same directory and is then renamed into place, so a crash or a
+    # concurrent writer can never leave a truncated key behind for the next run
+    # to send.
+    #
+    # @raise [SystemCallError] if the directory or file cannot be written
+    #   (callers treat caching as best-effort and degrade to a warning)
+    def self.write_key(path, key)
+      path.dirname.mkpath
+      path.dirname.chmod(0o700)
+      tmp = path.dirname + ".free_key.#{Process.pid}"
+      tmp.open(File::WRONLY | File::CREAT | File::TRUNC, 0o600) { |fh| fh.write(key) }
+      tmp.rename(path.to_s)
+    ensure
+      tmp&.unlink if tmp&.exist?
+    end
+
     private
 
     def http(uri)
@@ -307,8 +401,40 @@ module Quicopt
     # Remember a freshly minted API key from a response, if we have none yet. A
     # key we already hold is never overwritten.
     def capture_key(resp)
-      minted = resp["X-Quicopt-Api-Key"]
-      @api_key = minted if minted && !minted.empty? && (@api_key.nil? || @api_key.empty?)
+      remember(resp["X-Quicopt-Api-Key"])
+    end
+
+    # Adopt +minted+ as this client's key and cache it for the next run.
+    #
+    # Persisting is best-effort: an unwritable cache (read-only home, a container
+    # without +$HOME+) warns rather than raising, since the solve itself
+    # succeeded and failing it over a cache miss would be worse than re-minting.
+    def remember(minted)
+      return if minted.nil? || minted.empty? || !(@api_key.nil? || @api_key.empty?)
+
+      @api_key = minted
+      return if @explicit || !@cache
+
+      begin
+        Client.write_key(@key_path, minted)
+      rescue SystemCallError, IOError => e
+        warn "quicopt: could not cache the free key at #{@key_path} (#{e.message}); " \
+             "every run will mint a new key — set $#{KEY_PATH_ENV} to a writable location"
+      end
+    end
+
+    # Drop the cached key the server just rejected, in memory and on disk. The
+    # next request goes out keyless and mints a replacement.
+    def discard_key
+      @api_key = nil
+      @from_cache = false
+      return unless @cache
+
+      begin
+        @key_path.unlink
+      rescue SystemCallError, IOError
+        nil # an unremovable cache still gets re-minted past
+      end
     end
   end
 

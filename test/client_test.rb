@@ -3,7 +3,9 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "fileutils"
 require "json"
+require "tmpdir"
 require "zlib"
 
 # The transport: what goes on the wire, and what comes back off it.
@@ -19,6 +21,38 @@ class ClientTest < Minitest::Test
     @x = @m.int_var(0, 4, "x")
     @m.maximize(3 * @x)
     @m.add(@x <= 3)
+    # Every test gets its own throwaway key cache: the suite must never read or
+    # write the real ~/.cache/quicopt/free_key, which would both leak the
+    # developer's own key to the stub and make these tests order-dependent.
+    @cache_dir = Dir.mktmpdir("quicopt-test-cache")
+    @saved_key_path = ENV.fetch(Quicopt::KEY_PATH_ENV, nil)
+    ENV[Quicopt::KEY_PATH_ENV] = File.join(@cache_dir, "quicopt", "free_key")
+  end
+
+  def teardown
+    ENV[Quicopt::KEY_PATH_ENV] = @saved_key_path
+    FileUtils.remove_entry(@cache_dir)
+  end
+
+  # The cache file this test's clients read and write.
+  def key_path
+    Pathname(ENV.fetch(Quicopt::KEY_PATH_ENV))
+  end
+
+  # A handler that mints for a keyless request, 401s +stale+, and counts mints.
+  def minting_handler(mints, stale: nil)
+    lambda do |req|
+      bearer = req.headers["authorization"]
+      if bearer.nil?
+        mints << "minted-key"
+        json_ok(RESULT, "X-Quicopt-Api-Key" => "minted-key")
+      elsif stale && bearer == "Bearer #{stale}"
+        [401, { "Content-Type" => "application/json" },
+         JSON.generate({ "reason" => "invalid_key", "error" => "unknown key" })]
+      else
+        json_ok(RESULT)
+      end
+    end
   end
 
   def json_ok(body = RESULT, headers = {})
@@ -143,6 +177,100 @@ class ClientTest < Minitest::Test
       assert_raises(Quicopt::QuicoptError) { client.solve(@m) }
       assert_equal "minted-key", client.api_key
     end
+  end
+
+  # ── key caching ───────────────────────────────────────────────────────────
+
+  def test_the_minted_key_is_cached_and_reused_by_a_later_client
+    # The regression this cache exists for: a *new client* — standing in for a
+    # new process — must replay the cached key rather than mint a second one.
+    mints = []
+    StubServer.run(minting_handler(mints)) do |server|
+      Quicopt::Client.new(server.base_url).solve(@m)
+      assert_equal "minted-key", key_path.read
+      assert_equal 1, mints.size
+
+      fresh = Quicopt::Client.new(server.base_url)
+      assert_equal "minted-key", fresh.api_key
+
+      fresh.solve(@m)
+      assert_equal "Bearer minted-key", server.requests.last.headers["authorization"]
+      assert_equal 1, mints.size
+    end
+  end
+
+  def test_the_cache_file_is_private_to_its_owner
+    StubServer.run(->(_req) { json_ok(RESULT, "X-Quicopt-Api-Key" => "minted-key") }) do |server|
+      Quicopt::Client.new(server.base_url).solve(@m)
+      assert_equal "600", format("%o", key_path.stat().mode & 0o777)
+    end
+  end
+
+  def test_a_key_the_caller_holds_is_never_cached
+    StubServer.run(->(_req) { json_ok(RESULT, "X-Quicopt-Api-Key" => "minted-key") }) do |server|
+      Quicopt::Client.new(server.base_url, "mine").solve(@m)
+      refute_predicate key_path, :exist?
+    end
+  end
+
+  def test_caching_can_be_disabled
+    StubServer.run(->(_req) { json_ok(RESULT, "X-Quicopt-Api-Key" => "minted-key") }) do |server|
+      client = Quicopt::Client.new(server.base_url, cache: false)
+      client.solve(@m)
+      assert_equal "minted-key", client.api_key   # still reused in-process
+      refute_predicate key_path, :exist?          # but nothing persisted
+    end
+  end
+
+  def test_a_stale_cached_key_is_discarded_and_reminted_once
+    mints = []
+    StubServer.run(minting_handler(mints, stale: "stale-key")) do |server|
+      key_path.dirname.mkpath
+      key_path.write("stale-key")                 # a cache that outlived its key
+
+      client = Quicopt::Client.new(server.base_url)
+      assert_equal "stale-key", client.api_key
+
+      client.solve(@m)                            # 401 → discard → keyless → mint
+      assert_equal "minted-key", client.api_key
+      assert_equal "minted-key", key_path.read    # replaced, not merely dropped
+      assert_equal 1, mints.size
+
+      client.solve(@m)                            # and the replacement is reused
+      assert_equal 1, mints.size
+    end
+  end
+
+  def test_a_rejected_fresh_key_does_not_loop
+    # A key minted *this run* that is then rejected must surface the 401, not
+    # mint again — that path is what turns one caller into many keys.
+    mints = []
+    StubServer.run(minting_handler(mints, stale: "minted-key")) do |server|
+      client = Quicopt::Client.new(server.base_url)
+      client.solve(@m)
+      assert_equal 1, mints.size
+
+      error = assert_raises(Quicopt::QuicoptError) { client.solve(@m) }
+      assert_equal 401, error.status_code
+      assert_equal 1, mints.size                  # no re-mint
+    end
+  end
+
+  def test_the_default_key_path_honours_the_environment
+    saved = ENV.fetch("XDG_CACHE_HOME", nil)
+    ENV.delete(Quicopt::KEY_PATH_ENV)
+    ENV["XDG_CACHE_HOME"] = "/xdg"
+    assert_equal Pathname("/xdg/quicopt/free_key"), Quicopt::Client.default_key_path
+
+    ENV.delete("XDG_CACHE_HOME")
+    assert_equal Pathname(File.join(Dir.home, ".cache", "quicopt", "free_key")),
+                 Quicopt::Client.default_key_path
+
+    ENV[Quicopt::KEY_PATH_ENV] = "/elsewhere/key"  # the override wins outright
+    ENV["XDG_CACHE_HOME"] = "/xdg"
+    assert_equal Pathname("/elsewhere/key"), Quicopt::Client.default_key_path
+  ensure
+    ENV["XDG_CACHE_HOME"] = saved
   end
 
   # ── results and errors ────────────────────────────────────────────────────

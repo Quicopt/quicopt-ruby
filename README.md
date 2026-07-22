@@ -144,9 +144,17 @@ client = Quicopt::Client.new("http://localhost:8137")
 client = Quicopt::Client.new(url, "my-api-key", timeout: 120)
 ```
 
-**Keys.** The first call without a key mints one. The client remembers it and
-replays it as a bearer token on every later call; read it back from
-`client.api_key` to persist it yourself. A key you passed in is never overwritten.
+**Keys.** The first call without a key mints one, cached at
+`$XDG_CACHE_HOME/quicopt/free_key` (`~/.cache/…` by default) and replayed as a
+bearer token on every later call — including from later runs, so you keep one key
+without doing anything. A key you passed in is used as-is, never cached and never
+overwritten; `Quicopt::Client.new(url, cache: false)` keeps the minted key in
+memory only.
+
+Where the home directory does not survive the run (CI, containers), the cache is
+wiped between sessions and each run mints a new key. Set `QUICOPT_KEY_PATH` to a
+durable location — or `Client.new(url, key_path: …)` — to keep one key across
+sessions.
 
 **Per-project tagging.** `solve(model, project: "atlas")` tags the call so usage on
 one key can be attributed per project. It rides the query string and is never
