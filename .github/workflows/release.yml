@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# Build and publish the `quicopt` gem to RubyGems via Trusted Publishing (OIDC) —
+# no long-lived API token, and it sidesteps the MFA-vs-CI problem.
+#
+# Set the trusted publisher up once on rubygems.org (gem → Trusted Publishers)
+# with this repository, the workflow filename `release.yml`, and the environment
+# `rubygems` below; only then will a release actually push.
+#
+# A version bump is inert until a GitHub Release is tagged, and a published
+# version can never be re-pushed (`gem yank` does not free the number) — so don't
+# tag until the version is one you are willing to live with.
+name: Publish to RubyGems
+
+on:
+  release:
+    types: [published]   # publishing a GitHub release triggers a real push
+  workflow_dispatch:     # manual trigger, for the first release
+
+jobs:
+  test:
+    name: Test on Ruby ${{ matrix.ruby }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ruby: ["3.2", "3.3", "3.4"]   # the floor declared in the gemspec, upwards
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - run: bundle exec rake
+
+  publish:
+    name: Publish to RubyGems
+    needs: test
+    runs-on: ubuntu-latest
+    environment: rubygems
+    permissions:
+      id-token: write    # the OIDC token RubyGems Trusted Publishing verifies — no secrets
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - uses: rubygems/release-gem@v1
