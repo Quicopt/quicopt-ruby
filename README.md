@@ -52,7 +52,109 @@ result.solution            # {"x" => 4.0, "y" => 1.0, "z" => 10.0}
 result.solve_time_seconds
 ```
 
-## The model
+## A first realistic example: Sourcing & Procurement
+
+Suppose you are running a webshop for electronic parts. A customer wants to order 200 *resistor packs*, 150 *terminal blocks* and 95 *sensor modules*. You have three suppliers (*Nordwind*, *BitBazaar* and *CircuitCellar*) who each offer all of these parts at different price tags. We can express this as
+
+```ruby
+parts  = %w[resistor_pack terminal_block sensor_module]
+demand = { "resistor_pack" => 200, "terminal_block" => 150, "sensor_module" => 95 }
+
+suppliers = %w[Nordwind BitBazaar CircuitCellar]
+price = {
+  ["Nordwind",      "resistor_pack"] => 1.00, ["BitBazaar",     "terminal_block"] => 1.50, ["CircuitCellar", "sensor_module"] => 2.90,
+  ["BitBazaar",     "resistor_pack"] => 1.15, ["Nordwind",      "terminal_block"] => 1.90, ["Nordwind",      "sensor_module"] => 3.30,
+  ["CircuitCellar", "resistor_pack"] => 1.30, ["CircuitCellar", "terminal_block"] => 2.10, ["BitBazaar",     "sensor_module"] => 3.50,
+}
+```
+So far, so simple. Each supplier also has shipping fees as well as a "free-shipping threshold", which we can write as
+```ruby
+ship_fee   = { "Nordwind" => 40.0,  "BitBazaar" => 40.0,  "CircuitCellar" => 40.0 }
+free_above = { "Nordwind" => 300.0, "BitBazaar" => 300.0, "CircuitCellar" => 300.0 }
+```
+It's obvious what to order where, right? Picking the cheapest option for each part, we pay
+```ruby
+demand["resistor_pack"]  * price[["Nordwind",      "resistor_pack"]]  +
+demand["terminal_block"] * price[["BitBazaar",     "terminal_block"]] +
+demand["sensor_module"]  * price[["CircuitCellar", "sensor_module"]]  +
+ship_fee.values.sum # == 820.5
+```
+Let's check what a professional optimization solver has to say - we have `Quicopt` at hand:
+```ruby
+# new model
+m = Quicopt::Model.new
+```
+
+### Variables
+
+```ruby
+# empty hash literal to hold "quantity of part p ordered from supplier s"
+order_qty = {}
+
+# order quantities: integers with lower bounds 0 and no (nil) upper bounds
+suppliers.each { |s| parts.each { |p| order_qty[[s, p]] = m.int_var(0, nil, "x_#{s}_#{p}") } }
+
+# binary usage variables: are we using supplier s?
+use = suppliers.to_h { |s| [s, m.bin_var("use_#{s}")]  }
+
+# binary free-shipping variables: have we ordered enough to qualify?
+free = suppliers.to_h { |s| [s, m.bin_var("free_#{s}")] }
+
+# define a helper expression (sum over price times order quantity)
+cart_value = suppliers.to_h { |s| [s, parts.sum { |p| price[[s, p]] * order_qty[[s, p]] }] }
+```
+
+### Constraints & Objective
+
+```ruby
+# demand satisfaction: a constraint to enforce that the ordered quantity is AT LEAST the demand
+parts.each { |p| m.add(suppliers.sum { |s| order_qty[[s, p]] } >= demand[p]) }
+
+# introduce a "large" number to enfore a so-called "big-M" constraint
+big = demand.values.sum * 2
+# => as soon as order_qty is NOT zero, use is forced to one
+suppliers.each { |s| parts.each { |p| m.add(order_qty[[s, p]] <= big * use[s]) } }
+
+# free-shipping binaries must be zero when use is zero
+suppliers.each { |s| m.add(free[s] <= use[s]) }
+
+# since free occurs with a minus in the objective below,
+# it will be set to one if not forced to zero as long as free_above is not cleared
+suppliers.each { |s| m.add(free_above[s] * free[s] <= cart_value[s]) }
+
+# our cost objective function to be minimized
+# the shipping fee is not charged if both use and free are one
+m.minimize(suppliers.sum { |s| cart_value[s] + ship_fee[s] * (use[s] - free[s]) })
+```
+Now all we have to do is to send this to the Quicopt API service:
+```ruby
+# get the results from the API service
+result = Quicopt::Client.new.solve(m)
+
+# inspect the result
+puts result.display
+```
+
+```
+▄▀▀▀▄        ▄                     █
+█   █ █   █ ▄▄  ▄▀▀▀▄ ▄▀▀▀▄ █▀▀▀▄ ▀█▀▀
+█ ▀▄▀ █   █  █  █   ▄ █   █ █▄▄▄▀  █  ▄
+ ▀▀ ▀  ▀▀▀▀ ▀▀▀  ▀▀▀   ▀▀▀  █       ▀▀
+├── status:     optimal
+├── feasible:   true
+├── objective:  733.35
+├── x:          free_BitBazaar=1, free_CircuitCellar=1, free_Nordwind=0, use_BitBazaar=1, use_CircuitCellar=1, use_Nordwind=0, …  (15 variables)
+└── solve_time: 0.0497 s
+```
+But wait, it says `objective: 733.35`! We have *saved* `87.15`, or more than 10%! How have we achieved that? The solver gave us `use_Nordwind=0`, i.e. we are *not* using *Nordwind* at all. Looking at the other variables via `puts result.solution`, we find
+```ruby
+"x_BitBazaar_resistor_pack"     => 181.0,
+"x_CircuitCellar_resistor_pack" => 19.0
+```
+So we aren't buying *any* resistor packs at the *cheapest* supplier! The catch is, of course, that splitting the resistor packs in this way, we save the shipping fees *twice*. While one could still figure this out on a piece of paper for this small example, that does not scale to real scenarios. `Quicopt` does: try it out on [quicopt.com](https://quicopt.com).
+
+
+## The Quicopt API
 
 ### Variables
 
