@@ -9,24 +9,25 @@
 # expressions (+x + y <= 5+) builds a +Constraint+ — neither evaluates to a number
 # or a boolean.
 #
-# Expressions are normalised as they are built: an +Expression+ is always a
+# Expressions are collected as they are built: an +Expression+ is always a
 # constant plus a map of linear terms plus a map of quadratic terms, never an
 # unreduced operator tree. That is what makes the degree check exact — anything
 # that would exceed degree 2 raises at the point of multiplication rather than
-# reaching the service, per the "raise loudly, never approximate" rule the sibling
+# reaching the service, per the "raise loudly, never approximate" rule the other
 # clients follow.
 #
-# Only flat (unindexed) variables exist here. The wire schema also carries index
-# sets, parameter tables and quantified constraints; the Ruby DSL deliberately
-# does not — see the layered front-ends in the other clients for those.
+# Only flat (unindexed) variables exist here. The message format also carries
+# index sets, parameter tables and quantified constraints; the Ruby DSL
+# deliberately does not — the Python and Julia clients reach those.
 
 module Quicopt
   # Base class of every error this gem raises.
   class Error < StandardError; end
 
-  # An expression outside the linear/quadratic subset the DSL serves — e.g. a
-  # product of three variables, or a division by a variable. Raised at the point
-  # of construction so the offending term is still in the backtrace.
+  # An expression Quicopt cannot express, because it is neither linear nor
+  # quadratic — a product of three variables, say, or a division by a variable.
+  # Raised at the point of construction so the offending term is still in the
+  # backtrace.
   class UnsupportedExpression < Error; end
 
   # Number and term rendering shared by the DSL's +to_s+ methods. Presentation
@@ -76,7 +77,7 @@ module Quicopt
     end
 
     # Division by a numeric constant only — dividing by an expression is not a
-    # polynomial and has no wire form.
+    # polynomial, and a Quicopt model is a polynomial.
     #
     # @return [Expression] +self / divisor+
     # @raise [UnsupportedExpression] if +divisor+ is not a nonzero number
@@ -90,7 +91,7 @@ module Quicopt
       to_expr.scale(1.0 / divisor)
     end
 
-    # Integer powers 0, 1 and 2 only — the degree the subset admits.
+    # Integer powers 0, 1 and 2 only — a Quicopt model is linear or quadratic.
     #
     # @return [Expression] +self ** exponent+
     # @raise [UnsupportedExpression] on any other exponent
@@ -101,7 +102,8 @@ module Quicopt
       when 2 then to_expr.times(to_expr)
       else
         raise UnsupportedExpression,
-              "exponent #{exponent.inspect} is outside the linear/quadratic subset (0, 1 or 2)"
+              "exponent #{exponent.inspect} is not supported: a Quicopt model is " \
+              "linear or quadratic, so the exponent must be 0, 1 or 2"
       end
     end
 
@@ -139,15 +141,16 @@ module Quicopt
       Constraint.build(self, other, :eq)
     end
 
-    # A disequality is not representable on the wire, and Ruby would otherwise
-    # derive it from +==+ and silently answer +false+ for every row.
+    # Quicopt has no "not equal to" constraint, and Ruby would otherwise derive
+    # +!=+ from +==+ and silently answer +false+ for every row.
     #
     # @raise [UnsupportedExpression] always, for an expression-like operand
     def !=(other)
       return !equal?(other) unless Expression.castable?(other)
 
       raise UnsupportedExpression,
-            "!= is not a constraint the wire schema can carry; model it with a binary and a big-M row"
+            "!= is not a constraint Quicopt can express; model it with a binary " \
+            "variable and two big-M rows"
     end
 
     # Lets Ruby fold a numeric on the left into an expression, so +3 * x+ and
@@ -162,15 +165,15 @@ module Quicopt
 
   # A decision variable, owned by the +Model+ that created it.
   #
-  # +index+ is the variable's position in its model; it also fixes the canonical
-  # order of a quadratic term's two factors, so +x * y+ and +y * x+ land on the
-  # same coefficient.
+  # +index+ is the variable's position in its model; it also fixes the order of a
+  # quadratic term's two factors, so +x * y+ and +y * x+ land on the same
+  # coefficient.
   class Variable
     include Operators
 
     # @return [Model] the model that declared this variable
     attr_reader :model
-    # @return [String] the wire name; solutions come back keyed by it
+    # @return [String] the variable's name; solutions come back keyed by it
     attr_reader :name
     # @return [Symbol] +:CONTINUOUS+, +:INTEGER+ or +:BINARY+
     attr_reader :domain
@@ -210,7 +213,7 @@ module Quicopt
       object_id.hash
     end
 
-    # @return [String] the variable's wire name
+    # @return [String] the variable's name
     def to_s
       @name
     end
@@ -221,8 +224,8 @@ module Quicopt
     end
   end
 
-  # A normalised polynomial of degree ≤ 2 over a model's variables:
-  # +constant + Σ cᵢ·xᵢ + Σ qᵢⱼ·xᵢxⱼ+.
+  # A polynomial of degree ≤ 2 over a model's variables, always kept in collected
+  # form: +constant + Σ cᵢ·xᵢ + Σ qᵢⱼ·xᵢxⱼ+.
   #
   # Instances are immutable — every operator returns a new expression — so an
   # expression can be shared, reused and stored without aliasing surprises.
@@ -297,7 +300,7 @@ module Quicopt
                      quadratic: @quadratic.transform_values { |c| c * f })
     end
 
-    # Multiply two expressions, staying inside the degree-2 subset.
+    # Multiply two expressions, staying at degree 2 or below.
     #
     # A constant factor just scales; two linear factors expand into quadratic
     # terms. Anything else would exceed degree 2 and raises instead.
@@ -310,7 +313,8 @@ module Quicopt
 
       if degree > 1 || other.degree > 1
         raise UnsupportedExpression,
-              "product of degree #{degree} and degree #{other.degree} exceeds the quadratic subset"
+              "multiplying degree #{degree} by degree #{other.degree} gives a cubic or " \
+              "higher term; a Quicopt model is linear or quadratic"
       end
 
       quadratic = {}
@@ -390,9 +394,9 @@ module Quicopt
   # One constraint row: a residual expression compared against zero.
   #
   # +expr+ is +lhs - rhs+, so the row is +expr <= 0+, +expr >= 0+ or +expr == 0+.
-  # The lowering in +Quicopt::Wire+ splits that into the body +f+ (the variable
-  # terms) and the numeric +bound+ (the constant, moved to the other side), which
-  # is the shape the wire's function-in-set rows take.
+  # +Quicopt::Wire+ then splits that into the body (the variable terms) and the
+  # numeric +bound+ (the constant, moved to the other side), which is the form
+  # Quicopt sends.
   class Constraint
     # The comparison operator each sense renders as.
     SENSES = { le: "<=", ge: ">=", eq: "==" }.freeze
@@ -448,8 +452,8 @@ module Quicopt
   #   m.maximize(3 * x + 2 * y)
   #   m.add(x + y <= 5)
   #
-  # The model is the authoring surface; +to_program+ / +encode+ lower it to the
-  # wire IR, and +Quicopt::Client#solve+ ships it.
+  # You build the model; +to_program+ / +encode+ turn it into the message the
+  # service reads, and +Quicopt::Client#solve+ sends it.
   class Model
     # @return [Array<Variable>] the declared variables, in declaration order
     attr_reader :variables
@@ -472,9 +476,9 @@ module Quicopt
     #
     # @param lower [Numeric, nil] the lower bound; +nil+ means unbounded below
     # @param upper [Numeric, nil] the upper bound; +nil+ means unbounded above
-    # @param name [String, nil] the wire name; auto-generated when omitted
+    # @param name [String, nil] the variable's name; auto-generated when omitted
     # @param start [Numeric, nil] the starting point; defaults to 0 clamped into
-    #   the bounds, matching the other clients' front-ends
+    #   the bounds, matching the Python and Julia clients
     # @return [Variable]
     def num_var(lower = nil, upper = nil, name = nil, start: nil)
       declare(:CONTINUOUS, lower, upper, name, start)
@@ -483,8 +487,8 @@ module Quicopt
     # Declare an integer variable.
     #
     # Bounds of exactly +[0, 1]+ declare a +:BINARY+ variable rather than an
-    # integer one — the same normalisation the other front-ends apply, so the
-    # same model reaches the service as the same IR whichever client authored it.
+    # integer one — the same rule the Python and Julia clients apply, so the same
+    # model means the same thing whichever language wrote it.
     #
     # @return [Variable]
     def int_var(lower = nil, upper = nil, name = nil, start: nil)
@@ -501,7 +505,7 @@ module Quicopt
       declare(:BINARY, 0.0, 1.0, name, start)
     end
 
-    # Look a variable up by its wire name.
+    # Look a variable up by name.
     #
     # @return [Variable, nil]
     def variable(name)
@@ -538,14 +542,14 @@ module Quicopt
       constraint
     end
 
-    # Lower this model to the wire IR.
+    # Turn this model into the structured message the service reads.
     #
     # @return [Quicopt::Modeler::V1::Program]
     def to_program
       Wire.program(self)
     end
 
-    # Lower this model and serialize it to wire bytes.
+    # Turn this model into the message the service reads and encode it.
     #
     # @return [String] binary protobuf bytes
     def encode
@@ -591,8 +595,8 @@ module Quicopt
       value.to_f
     end
 
-    # 0 clamped into the bounds — finite for any bounds, matching the sibling
-    # front-ends so an unset start lowers identically across clients.
+    # 0 clamped into the bounds — finite for any bounds, matching the Python and
+    # Julia clients so an unset start comes out the same everywhere.
     def coerce_start(start, lower, upper)
       return [[0.0, lower].max, upper].min if start.nil?
       raise ArgumentError, "start must be a number, got #{start.class}" unless start.is_a?(Numeric)
