@@ -9,8 +9,7 @@ require_relative "quicopt/client"
 
 # Quicopt — a Ruby client for the Quicopt optimization service.
 #
-# Author a model in the native DSL, encode it to the versioned wire IR, and let
-# the service solve it:
+# Write a model in the native DSL, encode it, and let the service solve it:
 #
 #   require "quicopt"
 #
@@ -26,12 +25,12 @@ require_relative "quicopt/client"
 #
 # Three pieces, nothing more: +Model+ authors, +Wire+ encodes, +Client+ ships.
 module Quicopt
-  # The wire IR container, re-exported so callers can inspect or route the bytes
-  # themselves rather than going through +Client+.
+  # The structured message a model becomes, re-exported so callers can inspect
+  # the bytes or route them themselves rather than going through +Client+.
   Program = Wire::PB::Program
 
   class << self
-    # Lower a model to wire bytes.
+    # Encode a model to bytes.
     #
     # @param model [Model, Program]
     # @return [String] binary protobuf bytes
@@ -39,7 +38,7 @@ module Quicopt
       Wire.encode(model)
     end
 
-    # Parse wire bytes back into a +Program+.
+    # Parse bytes back into a +Program+.
     #
     # @param bytes [String]
     # @return [Program]

@@ -1,13 +1,34 @@
 # quicopt
 
-A Ruby client for the Quicopt optimization service.
+[![Gem](https://img.shields.io/gem/v/quicopt.svg)](https://rubygems.org/gems/quicopt)
+[![Ruby 3.2+](https://img.shields.io/badge/ruby-3.2%2B-CC342D.svg)](https://rubygems.org/gems/quicopt)
+[![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://timbode.github.io/quicopt-ruby/)
+[![Downloads](https://img.shields.io/gem/dt/quicopt.svg)](https://rubygems.org/gems/quicopt)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-It does exactly three things: author an optimization model in a small native Ruby
-DSL, encode it to the versioned Quicopt wire IR, and send it to the service. It is
-the Ruby peer of the Python and Julia clients — the same wire contract, the same
-results.
+A Ruby client for the [Quicopt](https://quicopt.com) optimization service.
 
-There is no local solver here. The service does the solving.
+You describe a decision: what you get to choose, what has to hold, and what you
+want as much (or as little) of as possible. Quicopt finds the best choice there is.
+
+The gem does three things: it lets you write that description in plain Ruby, packs
+it into a compact message, and sends it to the service, which solves it and sends
+the answer back. It is the Ruby counterpart of the Python and Julia clients, and
+all three send the same message — so the same model gets the same answer whichever
+language wrote it.
+
+There is no solver on your machine. The service does the solving.
+
+## Documentation
+
+- **[API reference](https://timbode.github.io/quicopt-ruby/)** — every public class
+  and method, with examples.
+- [`Quicopt::Model`](https://timbode.github.io/quicopt-ruby/Quicopt/Model.html) —
+  variables, constraints, objective.
+- [`Quicopt::Client`](https://timbode.github.io/quicopt-ruby/Quicopt/Client.html) —
+  sending a model, API keys, long-running jobs, errors.
+- [`Quicopt::Result`](https://timbode.github.io/quicopt-ruby/Quicopt/Result.html) —
+  what comes back.
 
 ## Install
 
@@ -21,8 +42,8 @@ or
 gem install quicopt
 ```
 
-Ruby 3.2 or newer. The only runtime dependency is `google-protobuf`; the transport
-is stdlib `net/http`.
+Ruby 3.2 or newer. The only library it needs at runtime is `google-protobuf`;
+requests go out over Ruby's built-in `net/http`.
 
 ## Quick start
 
@@ -154,7 +175,7 @@ But wait, it says `objective: 733.35`! We have *saved* `87.15`, or more than 10%
 So we aren't buying *any* resistor packs at the *cheapest* supplier! The catch is, of course, that splitting the resistor packs in this way, we save the shipping fees *twice*. While one could still figure this out on a piece of paper for this small example, that does not scale to real scenarios. `Quicopt` does: try it out on [quicopt.com](https://quicopt.com).
 
 
-## The Quicopt API
+## Building a model
 
 ### Variables
 
@@ -170,8 +191,8 @@ it, so naming your variables is worth it. `start:` sets the initial point; it
 defaults to 0 clamped into the bounds.
 
 Integer variables with bounds of exactly `[0, 1]` are declared binary — the same
-normalisation the other clients apply, so one model reaches the service as one
-program whichever language authored it.
+rule the Python and Julia clients apply, so the same model means the same thing
+whichever language wrote it.
 
 ### Expressions
 
@@ -185,16 +206,16 @@ z**2                   # quadratic
 x / 2                  # division by a constant
 ```
 
-Expressions are normalised as they are built — a constant plus linear terms plus
+Like terms are collected as you write them — a constant, plus linear terms, plus
 quadratic terms — so `x * y` and `y * x` are the same term, and `x - x` is zero.
 
-Only linear and quadratic expressions exist. Anything beyond that raises at the
-point you write it, rather than being silently dropped or approximated:
+Only linear and quadratic expressions exist. Anything beyond that raises where you
+wrote it, rather than being silently dropped or approximated:
 
 ```ruby
-x * y * z    # Quicopt::UnsupportedExpression: exceeds the quadratic subset
-x / y        # Quicopt::UnsupportedExpression: division by a variable
-x**3         # Quicopt::UnsupportedExpression
+x * y * z    # Quicopt::UnsupportedExpression — that would be cubic
+x / y        # Quicopt::UnsupportedExpression — you can only divide by a number
+x**3         # Quicopt::UnsupportedExpression — exponents are 0, 1 or 2
 ```
 
 ### Constraints
@@ -212,31 +233,36 @@ Two consequences of that, both deliberate:
 - `x == 5` is a row. Comparing a variable to something that could never be part
   of an expression (`x == nil`) still answers `false`, and variables remain
   usable as Hash and Set keys, but do not expect `==` to test equality.
-- `!=` has no wire form and raises rather than quietly answering `false`.
+- `!=` is not a constraint Quicopt can express, so it raises rather than quietly
+  answering `false`.
 - A number on the left works (`5 <= x`), because Ruby hands the comparison back
   to the expression. `5 == x`, however, is Ruby's own `Integer#==` and is just
   `false` — write `x == 5`.
 
 Chained comparisons (`1 <= x <= 5`) are not a thing in Ruby. Add two rows.
 
-## Working with the wire bytes
+## The encoded model
 
-The encoded program is not hidden. Inspect it, cache it, or route it yourself:
+`solve` encodes the model for you, but the encoded form is not hidden. Inspect it,
+store it, or send it by some other route:
 
 ```ruby
-bytes   = m.encode          # binary protobuf, ready to POST
-program = m.to_program      # the structured wire IR
-Quicopt.decode(bytes)       # back to a program
+bytes   = m.encode          # the message itself: protobuf bytes, ready to POST
+program = m.to_program      # the same content as a structured object you can read
+Quicopt.decode(bytes)       # bytes back into that object
 
-Quicopt::Client.new.solve(bytes)   # solve pre-encoded bytes directly
+Quicopt::Client.new.solve(bytes)   # solve an already-encoded model
 ```
 
-The wire schema is `proto/quicopt/modeler/v1/program.proto`, vendored in this
-repository; `gen/gen.sh` regenerates the codec from it.
+The message format is a [protobuf](https://protobuf.dev) schema,
+`proto/quicopt/modeler/v1/program.proto`, vendored in this repository; `gen/gen.sh`
+regenerates the Ruby classes from it. The Python and Julia clients send that same
+format, which is what makes a model portable between them.
 
-Note that the generated codec omits zero-valued scalars and does not canonicalize
-field order, so two encodings of the same model are *decode-equivalent* rather
-than byte-identical. Compare decoded programs, never hex.
+One caveat if you ever compare two encoded models: protobuf omits fields that hold
+their default value and does not fix the order of map entries, so two encodings of
+the same model can differ byte for byte while meaning exactly the same thing.
+Compare decoded models, never the raw bytes.
 
 ## The client
 
@@ -295,11 +321,11 @@ Everything this gem raises descends from `Quicopt::Error`.
 ```sh
 bundle install
 bundle exec rake        # run the tests
-gen/gen.sh              # regenerate the codec after a schema change
+gen/gen.sh              # regenerate the protobuf classes after a schema change
 ```
 
 The client tests run against a real local HTTP server rather than a stubbed
-`Net::HTTP`, so the transport — headers, query encoding, gzip framing, key
+`Net::HTTP`, so the whole request path — headers, query encoding, gzip framing, key
 capture, the error path — is covered end to end.
 
 ## Licence

@@ -11,11 +11,11 @@ require "zlib"
 
 # quicopt/client — talk to the Quicopt service over HTTP.
 #
-# Encode a model to wire bytes (+Quicopt::Wire+), POST it, read the result back.
-# Transport is stdlib +net/http+, so the gem's only runtime dependency stays
-# +google-protobuf+. The request body is the versioned wire bytes; the response is
-# the service's result JSON (+status+ / +objective+ / +solution+ / a
-# ready-to-print +display+ / …). The first keyless call mints an API key, returned
+# Encode a model (+Quicopt::Wire+), POST it, read the result back. Requests go
+# out over stdlib +net/http+, so the gem's only runtime dependency stays
+# +google-protobuf+. The request body is the encoded model; the response is the
+# service's result JSON (+status+ / +objective+ / +solution+ / a ready-to-print
+# +display+ / …). The first keyless call mints an API key, returned
 # in the +X-Quicopt-Api-Key+ response header; it is cached at
 # +$XDG_CACHE_HOME/quicopt/free_key+ and replayed as +Authorization: Bearer+ on
 # every later call — including from a later *process*, so one caller keeps one key
@@ -34,18 +34,18 @@ module Quicopt
   # reaches the same server out of the box.
   DEFAULT_BASE_URL = "https://try.quicoptapi.pgi.fz-juelich.de"
 
-  # The modelling front-end this client authors with, sent as the
-  # +source_language+ call tag. It names the *front-end*, not the language — the
-  # Ruby DSL is one front-end among the clients' several (+jump+, +pyomo+,
-  # +pulp+, +mathopt+), so it carries its own name here.
+  # The modelling library a model was written in, sent as the +source_language+
+  # call tag. It names the *library*, not the programming language — the service
+  # also sees +jump+, +pyomo+, +pulp+ and +mathopt+ — so this gem's own DSL
+  # carries its own name here.
   SOURCE_LANGUAGE = "quicopt-ruby"
 
   # A finished solve, parsed from the service's result JSON.
   #
-  # +objective+ and +feasible+ are +nil+ when the class or outcome leaves them
-  # undefined (an unconstrained heuristic, or no incumbent). +display+ is the
-  # framed, ready-to-print summary the service renders for every backend alike —
-  # print it rather than formatting your own.
+  # +objective+ and +feasible+ are +nil+ where the outcome leaves them undefined —
+  # a model with nothing to feasibility-check, or a run that found no solution.
+  # +display+ is the framed, ready-to-print summary the service renders the same
+  # way for every kind of model — print it rather than formatting your own.
   Result = Data.define(:job_id, :status, :objective, :feasible, :solution,
                        :solve_time_seconds, :solver_data, :display) do
     # Build a +Result+ from the service's decoded result JSON.
@@ -66,7 +66,7 @@ module Quicopt
           display: body["display"].to_s)
     end
 
-    # The class the service routed the model to (+LP+/+MILP+/+QUBO+/…), or +nil+
+    # The kind of model the service recognised (+LP+/+MILP+/+QUBO+/…), or +nil+
     # if it did not report one.
     #
     # @return [String, nil]
@@ -125,7 +125,7 @@ module Quicopt
       "DELETE" => Net::HTTP::Delete
     }.freeze
 
-    # The content type of a request body: the wire bytes are opaque binary.
+    # The content type of a request body: an encoded model is opaque binary.
     OCTET_STREAM = "application/octet-stream"
 
     # @return [String] the service base URL, without a trailing slash
@@ -165,8 +165,8 @@ module Quicopt
     # Solve +model+ synchronously, blocking until the result returns.
     #
     # @param model [Quicopt::Model, Quicopt::Wire::PB::Program, String] a model —
-    #   lowered and encoded here — or a +Program+ / pre-encoded wire bytes if you
-    #   built them yourself
+    #   encoded here — or a +Program+ / already-encoded bytes if you built them
+    #   yourself
     # @param project [String, nil] an optional project tag, so calls on one key
     #   can be invoiced per project. Sent as a query param, never baked into the
     #   model.
@@ -368,28 +368,29 @@ module Quicopt
       conn
     end
 
-    # Coerce to wire bytes: pre-encoded bytes pass through, a +Program+ is
-    # encoded, and a +Model+ is lowered then encoded — so a caller solves the
-    # *model*, never a hand-built +Program+.
+    # Coerce to encoded bytes: bytes pass through, a +Program+ is encoded, and a
+    # +Model+ becomes a +Program+ and is encoded — so a caller solves the *model*,
+    # never a hand-built +Program+.
     def to_wire(model)
       case model
       when Model, Wire::PB::Program then Wire.encode(model)
       when String then model
       else
-        raise TypeError, "cannot solve a #{model.class}: pass a Quicopt::Model, a Program, or wire bytes"
+        raise TypeError,
+              "cannot solve a #{model.class}: pass a Quicopt::Model, a Program, or encoded bytes"
       end
     end
 
-    # The modelling front-end that authored +model+, or +nil+ for a hand-built
-    # +Program+ / pre-encoded bytes, which have no front-end to attribute.
+    # The modelling library that wrote +model+, or +nil+ for a hand-built
+    # +Program+ / raw bytes, which have none to attribute.
     def source_language(model)
       SOURCE_LANGUAGE if model.is_a?(Model)
     end
 
     # Merge the per-call metadata tags into the request config (sent as query
-    # params): the front-end tag, unless the caller already set one, and the
-    # optional project id. The model is unchanged — these ride the query string,
-    # not the wire bytes.
+    # params): the modelling-library tag, unless the caller already set one, and
+    # the optional project id. The model is unchanged — these ride the query
+    # string, not the encoded model.
     def meta_config(model, project, config)
       meta = {}
       (config || {}).each { |k, v| meta[k.to_s] = v }
