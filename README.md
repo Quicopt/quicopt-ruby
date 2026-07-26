@@ -3,7 +3,6 @@
 [![Gem](https://img.shields.io/gem/v/quicopt.svg)](https://rubygems.org/gems/quicopt)
 [![Ruby 3.2+](https://img.shields.io/badge/ruby-3.2%2B-CC342D.svg)](https://rubygems.org/gems/quicopt)
 [![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://timbode.github.io/quicopt-ruby/)
-[![Downloads](https://img.shields.io/gem/dt/quicopt.svg)](https://rubygems.org/gems/quicopt)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 A Ruby client for the [Quicopt](https://quicopt.com) optimization service.
