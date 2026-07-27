@@ -2,7 +2,7 @@
 
 [![Gem](https://img.shields.io/gem/v/quicopt.svg)](https://rubygems.org/gems/quicopt)
 [![Ruby 3.2+](https://img.shields.io/badge/ruby-3.2%2B-CC342D.svg)](https://rubygems.org/gems/quicopt)
-[![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://timbode.github.io/quicopt-ruby/)
+[![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://quicopt.github.io/quicopt-ruby/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 A Ruby client for the [Quicopt](https://quicopt.com) optimization service.
@@ -20,13 +20,13 @@ There is no solver on your machine. The service does the solving.
 
 ## Documentation
 
-- **[API reference](https://timbode.github.io/quicopt-ruby/)** — every public class
+- **[API reference](https://quicopt.github.io/quicopt-ruby/)** — every public class
   and method, with examples.
-- [`Quicopt::Model`](https://timbode.github.io/quicopt-ruby/Quicopt/Model.html) —
+- [`Quicopt::Model`](https://quicopt.github.io/quicopt-ruby/Quicopt/Model.html) —
   variables, constraints, objective.
-- [`Quicopt::Client`](https://timbode.github.io/quicopt-ruby/Quicopt/Client.html) —
+- [`Quicopt::Client`](https://quicopt.github.io/quicopt-ruby/Quicopt/Client.html) —
   sending a model, API keys, long-running jobs, errors.
-- [`Quicopt::Result`](https://timbode.github.io/quicopt-ruby/Quicopt/Result.html) —
+- [`Quicopt::Result`](https://quicopt.github.io/quicopt-ruby/Quicopt/Result.html) —
   what comes back.
 
 ## Install
