@@ -15,14 +15,14 @@ Gem::Specification.new do |spec|
                      "variables you choose, the constraints that must hold, and the quantity " \
                      "to minimize or maximize — and solve it on the Quicopt service. There is " \
                      "no local solver: the service does the solving."
-  spec.homepage = "https://github.com/timbode/quicopt-ruby"
+  spec.homepage = "https://github.com/Quicopt/quicopt-ruby"
   spec.license = "Apache-2.0"
   spec.required_ruby_version = ">= 3.2.0"
 
   # These become the links on the gem's RubyGems page, so "Documentation" points
   # at the site this repo deploys rather than defaulting to RubyDoc.info.
   spec.metadata["source_code_uri"] = spec.homepage
-  spec.metadata["documentation_uri"] = "https://timbode.github.io/quicopt-ruby/"
+  spec.metadata["documentation_uri"] = "https://quicopt.github.io/quicopt-ruby/"
   spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
   spec.metadata["rubygems_mfa_required"] = "true"
 
