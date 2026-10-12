@@ -28,6 +28,12 @@ require "zlib"
 #
 # A non-2xx response raises +QuicoptError+, carrying the service's stable +reason+
 # code and the framed +display+ text.
+#
+# The service decides how long a solve may run unless the call passes
+# +time_limit:+, which rides the query string like +project:+. The service grants
+# at most its own maximum and reports both numbers in +solver_data+; the client
+# warns when it granted less, and waits on the socket (or polls) long enough for
+# the time it asked for.
 module Quicopt
   # The public Quicopt free-tier endpoint a +Client+ targets when no +base_url+
   # is given. Mirrors the Python and Julia clients' default, so every client
@@ -39,6 +45,11 @@ module Quicopt
   # also sees +jump+, +pyomo+, +pulp+ and +mathopt+ — so this gem's own DSL
   # carries its own name here.
   SOURCE_LANGUAGE = "quicopt-ruby"
+
+  # How long a request may take beyond the solve itself — waiting in the queue,
+  # reading the model, writing the answer — before the client stops waiting on a
+  # solve whose time limit it set.
+  WAIT_MARGIN = 60.0
 
   # The arrangement the service found for one permutation (see
   # +Model#permutation+), both ways round and counted from 0: +item_at[k]+ is the
@@ -84,6 +95,22 @@ module Quicopt
 
       Arrangement.new(item_at: json["item_at"].map { |i| i.to_i - 1 },
                       slot_of: json["slot_of"].map { |k| k.to_i - 1 })
+    end
+
+    # Warn when the service ran this solve for less time than its +time_limit+
+    # asked for. The service grants at most its maximum and reports what was
+    # asked and what it granted side by side in +solver_data+.
+    #
+    # @return [Result] +self+
+    # @api private
+    def warn_if_lowered
+      asked = solver_data["time_limit_s"]
+      granted = solver_data["time_budget_s"]
+      if asked && granted && granted < asked
+        warn "quicopt: the service ran this solve for #{Format.number(granted.to_f)} s, not the " \
+             "#{Format.number(asked.to_f)} s asked for: #{Format.number(granted.to_f)} s is the most it grants"
+      end
+      self
     end
 
     # The kind of model the service recognised (+LP+/+MILP+/+QUBO+/…), or +nil+
@@ -190,14 +217,29 @@ module Quicopt
     # @param project [String, nil] an optional project tag, so calls on one key
     #   can be invoiced per project. Sent as a query param, never baked into the
     #   model.
+    # @param time_limit [Numeric, nil] how many seconds the solve may run, in
+    #   place of the time the service would choose. A solver that proves its
+    #   answer sooner stops sooner; a search, which cannot prove it is done, runs
+    #   for all of it. The service grants at most its maximum (120 s on the free
+    #   tier), and a warning says so when it granted less. The client waits for
+    #   the answer at least this long plus a minute.
     # @param config [Hash, nil] optional service parameters, sent as the query
     #   string
     # @param gzip [Boolean] gzip-compress the request body
     # @return [Result]
     # @raise [QuicoptError] on a non-2xx response
-    def solve(model, project: nil, config: nil, gzip: false)
+    # @raise [TypeError] if +time_limit+ is not a number
+    # @raise [ArgumentError] if +time_limit+ is not positive and finite
+    #
+    # @example Give a search half a minute
+    #   result = client.solve(m, time_limit: 30)
+    #   result.solver_data["time_budget_s"]   # => 30.0
+    def solve(model, project: nil, time_limit: nil, config: nil, gzip: false)
+      time_limit = Client.check_time_limit(time_limit)
+      wait = time_limit.nil? ? @timeout : [@timeout, time_limit + WAIT_MARGIN].max
       Result.from_json(request("POST", "/v1/solve", to_wire(model),
-                               config: meta_config(model, project, config), gzip: gzip))
+                               config: meta_config(model, project, time_limit, config),
+                               gzip: gzip, timeout: wait)).warn_if_lowered
     end
 
     # Submit +model+ for asynchronous solving and return a handle to poll.
@@ -205,13 +247,39 @@ module Quicopt
     # Use this for the first call against a freshly-booted server: the worker
     # warms up before claiming, which can time out a cold synchronous call.
     #
+    # +time_limit+ works as for +solve+; +Job#result+ then polls at least that
+    # long plus a minute by default.
+    #
     # @return [Job] a handle to the queued job; call +Job#result+ to await it
     # @raise [QuicoptError] on a non-2xx response
-    def submit(model, project: nil, config: nil, gzip: false)
+    # @raise [TypeError] if +time_limit+ is not a number
+    # @raise [ArgumentError] if +time_limit+ is not positive and finite
+    def submit(model, project: nil, time_limit: nil, config: nil, gzip: false)
+      time_limit = Client.check_time_limit(time_limit)
       body = request("POST", "/v1/jobs", to_wire(model),
-                     config: meta_config(model, project, config), gzip: gzip)
+                     config: meta_config(model, project, time_limit, config), gzip: gzip)
       remember(body["api_key"]) # /v1/jobs echoes a minted key in the 202 body too
-      Job.new(self, body["job_id"])
+      Job.new(self, body["job_id"], time_limit)
+    end
+
+    # Check a time limit before it is sent.
+    #
+    # @param time_limit [Numeric, nil] seconds, or +nil+ to leave the choice to
+    #   the service
+    # @return [Float, nil]
+    # @raise [TypeError] if it is not a number
+    # @raise [ArgumentError] if it is not positive and finite
+    # @api private
+    def self.check_time_limit(time_limit)
+      return nil if time_limit.nil?
+      raise TypeError, "time_limit is a number of seconds, got #{time_limit.inspect}" unless time_limit.is_a?(Numeric)
+
+      seconds = time_limit.to_f
+      unless seconds.finite? && seconds.positive?
+        raise ArgumentError, "time_limit is a positive, finite number of seconds, got #{time_limit}"
+      end
+
+      seconds
     end
 
     # Perform one HTTP request, retrying once if a *cached* key is rejected.
@@ -229,13 +297,13 @@ module Quicopt
     # @return [String] the raw response body
     # @raise [QuicoptError] on a non-2xx response
     # @api private
-    def request_raw(method, path, data = nil, config: nil, gzip: false)
-      attempt(method, path, data, config: config, gzip: gzip)
+    def request_raw(method, path, data = nil, config: nil, gzip: false, timeout: nil)
+      attempt(method, path, data, config: config, gzip: gzip, timeout: timeout)
     rescue QuicoptError => e
       raise unless e.status_code == 401 && @from_cache
 
       discard_key
-      attempt(method, path, data, config: config, gzip: gzip)
+      attempt(method, path, data, config: config, gzip: gzip, timeout: timeout)
     end
 
     # Perform one HTTP request and return the raw response body.
@@ -243,12 +311,13 @@ module Quicopt
     # Sets the octet-stream content type (and gzip encoding, if requested) for a
     # body, attaches the bearer key when known, and captures a freshly minted key
     # off the response — including from an error response, since a 502/504 on a
-    # first call may still have minted one.
+    # first call may still have minted one. +timeout+ replaces the client's socket
+    # timeout for this one request.
     #
     # @return [String] the raw response body
     # @raise [QuicoptError] on a non-2xx response
     # @api private
-    def attempt(method, path, data = nil, config: nil, gzip: false)
+    def attempt(method, path, data = nil, config: nil, gzip: false, timeout: nil)
       uri = URI.parse(@base_url + path + Client.query(config))
       request_class = REQUESTS.fetch(method) { raise ArgumentError, "unsupported method #{method}" }
       req = request_class.new(uri)
@@ -262,7 +331,7 @@ module Quicopt
       end
       req["Authorization"] = "Bearer #{@api_key}" if @api_key
 
-      resp = http(uri).start { |conn| conn.request(req) }
+      resp = http(uri, timeout || @timeout).start { |conn| conn.request(req) }
       capture_key(resp) # a 502/504 on a first call still minted a key
       raise QuicoptError.new(resp.code.to_i, Client.decode(resp.body)) unless resp.is_a?(Net::HTTPSuccess)
 
@@ -379,12 +448,12 @@ module Quicopt
 
     private
 
-    def http(uri)
+    def http(uri, timeout)
       conn = Net::HTTP.new(uri.host, uri.port)
       conn.use_ssl = uri.scheme == "https"
-      conn.open_timeout = @timeout
-      conn.read_timeout = @timeout
-      conn.write_timeout = @timeout
+      conn.open_timeout = timeout
+      conn.read_timeout = timeout
+      conn.write_timeout = timeout
       conn
     end
 
@@ -407,16 +476,17 @@ module Quicopt
       SOURCE_LANGUAGE if model.is_a?(Model)
     end
 
-    # Merge the per-call metadata tags into the request config (sent as query
-    # params): the modelling-library tag, unless the caller already set one, and
-    # the optional project id. The model is unchanged — these ride the query
-    # string, not the encoded model.
-    def meta_config(model, project, config)
+    # Merge the per-call tags into the request config (sent as query params): the
+    # modelling-library tag, unless the caller already set one, the optional
+    # project id and the optional time limit. The model is unchanged — these ride
+    # the query string, not the encoded model.
+    def meta_config(model, project, time_limit, config)
       meta = {}
       (config || {}).each { |k, v| meta[k.to_s] = v }
       src = source_language(model)
       meta["source_language"] = src if src && !meta.key?("source_language")
       meta["project_id"] = project if project
+      meta["time_limit"] = time_limit if time_limit
       meta
     end
 
@@ -466,10 +536,13 @@ module Quicopt
     attr_reader :client
     # @return [String] the server-assigned job id
     attr_reader :job_id
+    # @return [Float, nil] the time limit the job was submitted with, if any
+    attr_reader :time_limit
 
-    def initialize(client, job_id)
+    def initialize(client, job_id, time_limit = nil)
       @client = client
       @job_id = job_id
+      @time_limit = time_limit
     end
 
     # Fetch the job's metadata and framed log tail.
@@ -484,15 +557,17 @@ module Quicopt
     #
     # @param wait [Boolean] poll past the service's +not_done+ reason until the
     #   worker finishes; when +false+, fetch once
-    # @param timeout [Numeric] maximum time to poll, in seconds
+    # @param timeout [Numeric, nil] maximum time to poll, in seconds. Defaults to
+    #   120 s, or the job's +time_limit+ plus a minute when that is longer.
     # @param poll [Numeric] delay between polls, in seconds
     # @return [Result]
     # @raise [QuicoptError] if +wait+ is false and the job is not yet done, on any
     #   non-+not_done+ error, or once +timeout+ elapses
-    def result(wait: true, timeout: 120.0, poll: 0.5)
+    def result(wait: true, timeout: nil, poll: 0.5)
+      timeout ||= @time_limit.nil? ? 120.0 : [120.0, @time_limit + WAIT_MARGIN].max
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
       loop do
-        return Result.from_json(@client.request("GET", "/v1/jobs/#{@job_id}/result"))
+        return Result.from_json(@client.request("GET", "/v1/jobs/#{@job_id}/result")).warn_if_lowered
       rescue QuicoptError => e
         raise if !wait || e.reason != "not_done"
         raise if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline

@@ -316,7 +316,6 @@ class ClientTest < Minitest::Test
     end
   end
 
-
   def test_an_error_carries_the_status_reason_and_display
     body = { "error" => "model too large", "reason" => "size_exceeded",
              "display" => "framed error", "contact" => "olaf@quicopt.com" }
@@ -342,6 +341,74 @@ class ClientTest < Minitest::Test
   def test_errors_are_rescuable_as_the_gem_wide_error
     StubServer.run(->(_req) { [500, {}, ""] }) do |server|
       assert_raises(Quicopt::Error) { Quicopt::Client.new(server.base_url).solve(@m) }
+    end
+  end
+
+  # ── time limits ───────────────────────────────────────────────────────────
+
+  def lowered(asked, granted)
+    RESULT.merge("solver_data" => { "time_limit_s" => asked, "time_budget_s" => granted })
+  end
+
+  def test_a_time_limit_rides_the_query_string
+    StubServer.run(->(_req) { json_ok(lowered(30.0, 30.0)) }) do |server|
+      Quicopt::Client.new(server.base_url).solve(@m, time_limit: 30)
+      assert_includes server.requests.first.query, "time_limit=30.0"
+    end
+  end
+
+  def test_no_time_limit_sends_none
+    StubServer.run(->(_req) { json_ok }) do |server|
+      Quicopt::Client.new(server.base_url).solve(@m)
+      refute_includes server.requests.first.query, "time_limit"
+    end
+  end
+
+  def test_a_time_limit_is_checked_before_anything_is_sent
+    client = Quicopt::Client.new("http://127.0.0.1:9")    # nothing listens there
+    assert_raises(TypeError) { client.solve(@m, time_limit: "30") }
+    [0, -1, Float::INFINITY, Float::NAN].each do |bad|
+      assert_raises(ArgumentError) { client.solve(@m, time_limit: bad) }
+      assert_raises(ArgumentError) { client.submit(@m, time_limit: bad) }
+    end
+  end
+
+  def test_a_lowered_time_limit_warns
+    StubServer.run(->(_req) { json_ok(lowered(300.0, 120.0)) }) do |server|
+      _, err = capture_io { Quicopt::Client.new(server.base_url).solve(@m, time_limit: 300) }
+      assert_includes err, "ran this solve for 120 s, not the 300 s asked for"
+    end
+  end
+
+  def test_a_granted_time_limit_is_silent
+    StubServer.run(->(_req) { json_ok(lowered(30.0, 30.0)) }) do |server|
+      assert_output("", "") { Quicopt::Client.new(server.base_url).solve(@m, time_limit: 30) }
+    end
+  end
+
+  def test_a_time_limit_waits_longer_than_the_socket_timeout
+    slow = lambda do |_req|
+      sleep 0.5
+      json_ok(lowered(1.0, 1.0))
+    end
+    StubServer.run(slow) do |server|
+      result = Quicopt::Client.new(server.base_url, timeout: 0.2).solve(@m, time_limit: 1)
+      assert_equal "optimal", result.status
+    end
+  end
+
+  def test_a_job_keeps_its_time_limit_and_warns_when_lowered
+    handler = lambda do |req|
+      next json_ok({ "job_id" => "job-7" }) if req.method == "POST"
+
+      json_ok(lowered(300.0, 120.0))
+    end
+    StubServer.run(handler) do |server|
+      job = Quicopt::Client.new(server.base_url).submit(@m, time_limit: 300)
+      assert_in_delta 300.0, job.time_limit
+      assert_includes server.requests.first.query, "time_limit=300.0"
+      _, err = capture_io { job.result }
+      assert_includes err, "120 s is the most it grants"
     end
   end
 

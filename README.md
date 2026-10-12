@@ -334,6 +334,15 @@ baked into the model.
 
 **Large models.** `solve(model, gzip: true)` compresses the request body.
 
+**Time limit.** The service chooses how long a solve may run. `time_limit:` sets that time instead, in seconds. A solver that proves its answer sooner still stops sooner; a search, which cannot prove it is done, runs for all of it:
+
+```ruby
+result = client.solve(m, time_limit: 30)
+result.solver_data["time_budget_s"]    # 30.0: the time the service granted
+```
+
+The service grants at most its maximum (120 s on the free tier). Asked for more, it runs for its maximum, and the client warns that the solve got less time than requested. `submit` takes `time_limit:` too, and `job.result` then waits at least that long.
+
 **Asynchronous solving.** Use this for the first call against a server that may
 still be warming up, where a blocking call could time out:
 
