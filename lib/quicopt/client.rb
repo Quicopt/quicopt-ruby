@@ -40,14 +40,22 @@ module Quicopt
   # carries its own name here.
   SOURCE_LANGUAGE = "quicopt-ruby"
 
+  # The arrangement the service found for one permutation (see
+  # +Model#permutation+), both ways round and counted from 0: +item_at[k]+ is the
+  # item in slot +k+ — for a route, the stops in the order visited — and
+  # +slot_of[i]+ the slot of item +i+.
+  Arrangement = Data.define(:item_at, :slot_of)
+
   # A finished solve, parsed from the service's result JSON.
   #
   # +objective+ and +feasible+ are +nil+ where the outcome leaves them undefined —
   # a model with nothing to feasibility-check, or a run that found no solution.
   # +display+ is the framed, ready-to-print summary the service renders the same
   # way for every kind of model — print it rather than formatting your own.
+  # +structures+ holds the +Arrangement+ of each permutation the model declares,
+  # by name, and is empty for a model with none.
   Result = Data.define(:job_id, :status, :objective, :feasible, :solution,
-                       :solve_time_seconds, :solver_data, :display) do
+                       :solve_time_seconds, :solver_data, :display, :structures) do
     # Build a +Result+ from the service's decoded result JSON.
     #
     # Missing optional keys default rather than raise, so a partial result (e.g.
@@ -63,7 +71,19 @@ module Quicopt
           solution: body["solution"] || {},
           solve_time_seconds: body["solve_time_seconds"] || 0.0,
           solver_data: body["solver_data"] || {},
-          display: body["display"].to_s)
+          display: body["display"].to_s,
+          structures: (body["structures"] || {}).transform_values { |s| arrangement(s) })
+    end
+
+    # One permutation's arrangement from the result JSON, where items and slots
+    # count from 1, or +nil+ when no arrangement came back.
+    #
+    # @api private
+    def self.arrangement(json)
+      return nil if json.nil?
+
+      Arrangement.new(item_at: json["item_at"].map { |i| i.to_i - 1 },
+                      slot_of: json["slot_of"].map { |k| k.to_i - 1 })
     end
 
     # The kind of model the service recognised (+LP+/+MILP+/+QUBO+/…), or +nil+

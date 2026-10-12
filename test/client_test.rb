@@ -299,8 +299,23 @@ class ClientTest < Minitest::Test
       assert_empty result.solution
       assert_equal 0.0, result.solve_time_seconds
       assert_equal "", result.display
+      assert_empty result.structures
     end
   end
+
+  def test_arrangements_come_back_counted_from_zero
+    body = RESULT.merge("structures" => { "route" => { "item_at" => [4, 2, 5, 3, 1],
+                                                       "slot_of" => [5, 2, 4, 1, 3] },
+                                          "unsolved" => nil })
+    StubServer.run(->(_req) { json_ok(body) }) do |server|
+      result = Quicopt::Client.new(server.base_url).solve(@m)
+      route = result.structures["route"]
+      assert_equal [3, 1, 4, 2, 0], route.item_at
+      assert_equal [4, 1, 3, 0, 2], route.slot_of
+      assert_nil result.structures["unsolved"]
+    end
+  end
+
 
   def test_an_error_carries_the_status_reason_and_display
     body = { "error" => "model too large", "reason" => "size_exceeded",
