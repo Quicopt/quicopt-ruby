@@ -17,8 +17,10 @@
 # clients follow.
 #
 # Only flat (unindexed) variables exist here. The message format also carries
-# index sets, parameter tables and quantified constraints; the Ruby DSL
-# deliberately does not — the Python and Julia clients reach those.
+# index sets and quantified constraints; the Ruby DSL deliberately does not — the
+# Python and Julia clients reach those. It does carry permutations and lookup
+# tables (+quicopt/structured+), whose reads enter an +Expression+ as factors of
+# degree 1, alongside the variables.
 
 module Quicopt
   # Base class of every error this gem raises.
@@ -166,8 +168,8 @@ module Quicopt
   # A decision variable, owned by the +Model+ that created it.
   #
   # +index+ is the variable's position in its model; it also fixes the order of a
-  # quadratic term's two factors, so +x * y+ and +y * x+ land on the same
-  # coefficient.
+  # quadratic term's two factors (see +order+), so +x * y+ and +y * x+ land on the
+  # same coefficient.
   class Variable
     include Operators
 
@@ -202,6 +204,20 @@ module Quicopt
       Expression.new(linear: { self => 1.0 })
     end
 
+    # Where this variable sorts among its model's terms: before every read of a
+    # permutation or lookup table, then by +index+.
+    #
+    # @api private
+    def order
+      [0, @index]
+    end
+
+    # @return [Array<Variable>] this variable alone
+    # @api private
+    def variables
+      [self]
+    end
+
     # Identity equality, kept separate from +==+ (which builds a constraint) so
     # variables stay usable as Hash and Set keys.
     def eql?(other)
@@ -227,6 +243,10 @@ module Quicopt
   # A polynomial of degree ≤ 2 over a model's variables, always kept in collected
   # form: +constant + Σ cᵢ·xᵢ + Σ qᵢⱼ·xᵢxⱼ+.
   #
+  # A value read from a permutation (+route.item_at(0)+) or a lookup table
+  # (+dist[i, j]+) counts as one factor, like a variable: +2 * dist[i, j]+ is
+  # linear, +x * dist[i, j]+ quadratic.
+  #
   # Instances are immutable — every operator returns a new expression — so an
   # expression can be shared, reused and stored without aliasing surprises.
   class Expression
@@ -234,7 +254,8 @@ module Quicopt
 
     # @return [Float] the constant term
     attr_reader :constant
-    # @return [Hash{Variable=>Float}] linear coefficients, in insertion order
+    # @return [Hash{Variable=>Float}] linear coefficients, in insertion order.
+    #   A read of a permutation or lookup table is a key here too.
     attr_reader :linear
     # @return [Hash{Array(Variable,Variable)=>Float}] quadratic coefficients,
     #   keyed by the factor pair in model order, in insertion order
@@ -330,10 +351,20 @@ module Quicopt
                      quadratic: Expression.prune(quadratic))
     end
 
-    # Every variable this expression mentions, in first-use order.
+    # Every variable this expression mentions, in first-use order — including
+    # those in the positions of a lookup table read.
     #
     # @return [Array<Variable>]
     def variables
+      factors.flat_map(&:variables).uniq
+    end
+
+    # Every factor of every term — variables and reads of permutations and lookup
+    # tables — in first-use order.
+    #
+    # @return [Array<Variable, Placement, TableEntry>]
+    # @api private
+    def factors
       seen = @linear.keys
       @quadratic.each_key { |a, b| seen |= [a, b] }
       seen
@@ -343,8 +374,8 @@ module Quicopt
     def to_s
       terms = []
       terms << Format.number(@constant) unless @constant.zero?
-      @linear.each { |v, c| terms << Format.term(c, v.name) }
-      @quadratic.each { |(a, b), c| terms << Format.term(c, "#{a.name}*#{b.name}") }
+      @linear.each { |v, c| terms << Format.term(c, v.to_s) }
+      @quadratic.each { |(a, b), c| terms << Format.term(c, "#{a}*#{b}") }
       return "0" if terms.empty?
 
       terms.join(" + ").gsub(" + -", " - ")
@@ -387,7 +418,7 @@ module Quicopt
     #
     # @api private
     def self.pair(left, right)
-      (left.index <= right.index ? [left, right] : [right, left]).freeze
+      ((left.order <=> right.order) <= 0 ? [left, right] : [right, left]).freeze
     end
   end
 
@@ -463,10 +494,18 @@ module Quicopt
     attr_reader :objective
     # @return [String] +"min"+ or +"max"+
     attr_reader :sense
+    # @return [Array<Permutation>] the declared permutations, in declaration order
+    attr_reader :permutations
+    # @return [Array<LookupTable>] the declared lookup tables, in declaration order
+    attr_reader :tables
 
     def initialize
       @variables = []
       @by_name = {}
+      @permutations = []
+      @tables = []
+      @structured = {}
+      @reads = 0
       @constraints = []
       @objective = Expression.new
       @sense = "min"
@@ -510,6 +549,95 @@ module Quicopt
     # @return [Variable, nil]
     def variable(name)
       @by_name[name.to_s]
+    end
+
+    # Declare an order as a decision: +n+ items placed in +n+ slots, one item per
+    # slot, both numbered from 0. For a route the items are the stops and the
+    # slots are the visits, so slot 0 holds the first stop visited; for a machine
+    # the items are the jobs and the slots the positions in its queue.
+    #
+    # Five stops along a road; find the shortest route through all of them that
+    # visits stop 3 before stop 0:
+    #
+    #   position = [0, 3, 1, 4, 2]                  # km along the road, stops 0 to 4
+    #   m = Quicopt::Model.new
+    #   dist  = m.lookup_table("dist", position.map { |a| position.map { |b| (a - b).abs } })
+    #   route = m.permutation("route", 5)
+    #   route.precede(3, 0)                         # stop 3 is visited before stop 0
+    #   m.minimize((0...4).sum { |k| dist[route.item_at(k), route.item_at(k + 1)] })
+    #
+    #   result = Quicopt::Client.new.solve(m)
+    #   result.objective                            # 4.0
+    #   result.structures["route"].item_at          # [3, 1, 4, 2, 0]: the stops in the order visited
+    #
+    # A model with a permutation is solved by a search, so its result has the
+    # status +"heuristic"+.
+    #
+    # @param name [String, Symbol] identifies the permutation in the result, as
+    #   +result.structures[name]+; shares one namespace with the model's variables
+    #   and lookup tables
+    # @param n [Integer] the number of items, at least 2
+    # @param start [Array<Integer>, nil] the arrangement the service's search
+    #   starts from: +start[i]+ is the slot of item +i+, so it holds each of
+    #   +0...n+ once. Left out, item +i+ starts in slot +i+.
+    # @return [Permutation]
+    # @raise [TypeError] if +n+ is not an Integer
+    # @raise [ArgumentError] if +n+ is below 2, the name is taken, or +start+ is
+    #   not an arrangement of +0...n+
+    def permutation(name, n, start: nil)
+      raise TypeError, "a permutation's size is a whole number, got #{n.inspect}" unless n.is_a?(Integer)
+      raise ArgumentError, "a permutation has at least 2 items, got #{n}" if n < 2
+
+      nm = claim(name)
+      unless start.nil? || (start.is_a?(Array) && start.all?(Integer) && start.sort == (0...n).to_a)
+        raise ArgumentError, "permutation #{nm.inspect}: start must hold each of 0 to #{n - 1} once " \
+                             "(start[i] is the slot item i starts in)"
+      end
+      permutation = Permutation.new(self, nm, n, start&.dup)
+      @permutations << permutation
+      @structured[nm] = permutation
+    end
+
+    # Declare a table of data that can be indexed by decisions. A model sometimes
+    # needs a number from a table at a position that is not known yet: the distance
+    # between the first and the second stop of a route whose order the service is
+    # still choosing, or the price of an option an integer variable picks. A Ruby
+    # array cannot be indexed this way; the table returned here can.
+    #
+    #   price  = m.lookup_table("price", [3.0, 1.0, 4.0, 1.5])
+    #   choice = m.int_var(0, 3, "choice")
+    #   m.minimize(price[choice])                   # picks option 1, at 1.0
+    #
+    # Indexing with whole numbers only gives the entry itself; indexing with an
+    # expression, such as +Permutation#item_at+ or an integer variable, gives an
+    # expression whose value is the entry at the positions the service chooses.
+    #
+    # The whole table is sent with the model, so a very large table makes the
+    # request large.
+    #
+    # @param name [String, Symbol] the table's name; shares one namespace with the
+    #   model's variables and permutations
+    # @param values [Array<Numeric>, Array<Array<Numeric>>] a vector (indexed
+    #   +table[i]+) or a matrix (+table[i, j]+, every row the same length) of
+    #   numbers, none of them NaN
+    # @return [LookupTable]
+    # @raise [TypeError] if +values+ is neither a vector nor a matrix of numbers
+    # @raise [ArgumentError] if it is empty, ragged or holds NaN, or the name is
+    #   taken
+    def lookup_table(name, values)
+      nm = claim(name)
+      data, shape = table_data(nm, values)
+      table = LookupTable.new(self, nm, data, shape)
+      @tables << table
+      @structured[nm] = table
+    end
+
+    # The +order+ of the next read of a permutation or lookup table: after every
+    # variable, then in the order the reads were first made.
+    #
+    # @api private
+    def next_order
+      [1, @reads += 1]
     end
 
     # Minimize +expr+.
@@ -564,6 +692,11 @@ module Quicopt
       @variables.each do |v|
         lines << "  #{v.name} in #{v.domain} [#{Format.number(v.lower)}, #{Format.number(v.upper)}]"
       end
+      @permutations.each do |p|
+        order = p.precedences.map { |a, b| ", #{a} before #{b}" }.join
+        lines << "  #{p.name} orders items 0 to #{p.size - 1}#{order}"
+      end
+      @tables.each { |t| lines << "  #{t.name} is a #{t.shape.join(' × ')} lookup table" }
       lines.join("\n")
     end
 
@@ -581,6 +714,7 @@ module Quicopt
 
       nm = name.nil? ? auto_name : name.to_s
       raise ArgumentError, "duplicate variable name #{nm.inspect}" if @by_name.key?(nm)
+      raise ArgumentError, "the name #{nm.inspect} is already declared on this model" if @structured.key?(nm)
 
       variable = Variable.new(self, nm, domain, lo, hi, coerce_start(start, lo, hi), @variables.size)
       @variables << variable
@@ -606,8 +740,52 @@ module Quicopt
 
     def auto_name
       n = @variables.size + 1
-      n += 1 while @by_name.key?("x#{n}")
+      n += 1 while @by_name.key?("x#{n}") || @structured.key?("x#{n}")
       "x#{n}"
+    end
+
+    # +name+ as a String, checked to be free among the model's variables,
+    # permutations and lookup tables: on the wire one name must mean one thing.
+    def claim(name)
+      unless name.is_a?(String) || name.is_a?(Symbol)
+        raise TypeError, "a name is a String or a Symbol, got #{name.inspect}"
+      end
+
+      nm = name.to_s
+      raise ArgumentError, "a name cannot be empty" if nm.empty?
+      if @by_name.key?(nm) || @structured.key?(nm)
+        raise ArgumentError, "the name #{nm.inspect} is already declared on this model"
+      end
+
+      nm
+    end
+
+    # A table's entries as frozen Floats, and its shape.
+    def table_data(name, values)
+      raise TypeError, "lookup table #{name.inspect}: values is an Array, got #{values.class}" unless values.is_a?(Array)
+      raise ArgumentError, "lookup table #{name.inspect} has no entries" if values.empty?
+
+      if values.all?(Numeric)
+        data = values.map(&:to_f)
+        shape = [data.size]
+        flat = data
+      elsif values.all?(Array)
+        unless values.all? { |row| row.all?(Numeric) }
+          raise TypeError, "lookup table #{name.inspect}: a matrix holds numbers only"
+        end
+        if values.first.empty? || values.any? { |row| row.size != values.first.size }
+          raise ArgumentError, "lookup table #{name.inspect}: every row of a matrix has the same, " \
+                               "nonzero number of entries"
+        end
+        data = values.map { |row| row.map(&:to_f).freeze }
+        shape = [data.size, data.first.size]
+        flat = data.flatten
+      else
+        raise TypeError, "lookup table #{name.inspect}: values is a vector or a matrix of numbers"
+      end
+      raise ArgumentError, "lookup table #{name.inspect} holds NaN" if flat.any?(&:nan?)
+
+      [data.freeze, shape]
     end
 
     def set_objective(expr, sense)
@@ -618,13 +796,15 @@ module Quicopt
       objective
     end
 
-    # Reject variables belonging to another model: their names would collide
-    # arbitrarily and their coefficients would silently merge on the wire.
+    # Reject variables, permutations and tables belonging to another model: their
+    # names would collide arbitrarily and their coefficients would silently merge
+    # on the wire.
     def check_ownership(expr)
-      expr.variables.each do |v|
-        next if v.model.equal?(self)
+      expr.factors.each do |f|
+        next if f.model.equal?(self)
 
-        raise ArgumentError, "variable #{v.name.inspect} belongs to a different Quicopt::Model"
+        what = f.is_a?(Variable) ? "variable #{f.name.inspect}" : f.to_s
+        raise ArgumentError, "#{what} belongs to a different Quicopt::Model"
       end
     end
   end

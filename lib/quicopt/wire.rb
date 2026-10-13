@@ -22,6 +22,15 @@ require_relative "modeler/v1/program_pb"
 # A unit coefficient is dropped rather than emitted as +1 * e+, an additive zero
 # constant is dropped from a sum, and a sum of one term is that term.
 #
+# Permutations and lookup tables count from 0 in the DSL and from 1 on the wire,
+# and this file is the one place that shifts between the two:
+#
+#   route.item_at(k)  ⇒  item_at(k + 1, route) − 1
+#   dist[i, j]        ⇒  dist[i + 1, j + 1]
+#
+# A read of a permutation used as a table position meets both shifts, and they
+# cancel: +dist[route.item_at(0), …]+ goes out as +dist[item_at(1, route), …]+.
+#
 # Note on byte-level comparison: protobuf omits fields that hold their default
 # value (+start: 0.0+) and does not fix the order of map entries, so two encodings
 # of one model can differ byte for byte while meaning exactly the same thing — the
@@ -42,10 +51,12 @@ module Quicopt
       # @return [PB::Program]
       def program(model)
         PB::Program.new(
+          params: model.tables.sort_by(&:name).map { |t| param_table(t) },
           vars: model.variables.map { |v| var_decl(v) },
           objective: expression(model.objective),
           sense: model.sense,
-          constraints: model.constraints.map { |c| constraint(c) }
+          constraints: model.constraints.map { |c| constraint(c) },
+          structures: model.permutations.sort_by(&:name).map { |p| structure_decl(p) }
         )
       end
 
@@ -97,6 +108,17 @@ module Quicopt
         PB::Expression.new(apply: PB::Apply.new(op: op, args: args))
       end
 
+      # A reference to a declared permutation, by name.
+      def structure(name)
+        PB::Expression.new(structure: PB::StructRef.new(name: name))
+      end
+
+      # A read of the parameter table +param+ at the given positions (counted
+      # from 1, as on the wire).
+      def table(param, index)
+        PB::Expression.new(table: PB::TableRef.new(param: param, index: index))
+      end
+
       # +coef · expr+, dropping a unit coefficient.
       def scaled(coef, expr)
         coef == 1.0 ? expr : apply("*", [const(coef), expr])
@@ -123,9 +145,66 @@ module Quicopt
       def expression(expr)
         terms = []
         terms << const(expr.constant) unless expr.constant.zero?
-        expr.linear.each { |v, c| terms << scaled(c, var(v.name)) }
-        expr.quadratic.each { |(a, b), c| terms << scaled(c, apply("*", [var(a.name), var(b.name)])) }
+        expr.linear.each { |v, c| terms << scaled(c, factor(v)) }
+        expr.quadratic.each { |(a, b), c| terms << scaled(c, apply("*", [factor(a), factor(b)])) }
         sum(terms)
+      end
+
+      # One factor of a term: a variable, or a read of a permutation or a lookup
+      # table, each standing for its value counted from 0.
+      #
+      # @param factor [Quicopt::Variable, Quicopt::Placement, Quicopt::TableEntry]
+      # @return [PB::Expression]
+      def factor(factor)
+        case factor
+        when Variable then var(factor.name)
+        when Placement
+          apply("-", [apply(factor.op.to_s, [const(factor.position + 1), structure(factor.permutation.name)]),
+                      const(1.0)])
+        when TableEntry then table(factor.table.name, factor.index.map { |e| one_based(e) })
+        else raise Error, "unknown factor #{factor.inspect}"
+        end
+      end
+
+      # A table position, counted from 0 in the DSL, as the wire's position
+      # counted from 1: a whole number moves up by one, a read of a permutation
+      # loses the − 1 its own shift added, and anything else gains + 1.
+      #
+      # @param position [Quicopt::Expression]
+      # @return [PB::Expression]
+      def one_based(position)
+        return const(position.constant + 1) if position.constant?
+
+        e = expression(position)
+        down = e.node == :apply && e.apply.op == "-" && e.apply.args.size == 2 &&
+               e.apply.args[1].node == :constant && e.apply.args[1].constant == 1.0
+        down ? e.apply.args[0] : apply("+", [e, const(1.0)])
+      end
+
+      # A lookup table → +ParamTable+: one entry per cell, keyed by its positions
+      # counted from 1, in row-major order.
+      #
+      # @param table [Quicopt::LookupTable]
+      # @return [PB::ParamTable]
+      def param_table(table)
+        cells = table.shape.map { |extent| (0...extent).to_a }
+        keys = cells.first.product(*cells.drop(1))
+        PB::ParamTable.new(name: table.name, entries: keys.map do |key|
+          PB::ParamEntry.new(key: PB::Index.new(elems: key.map { |k| PB::IndexElem.new(int: k + 1) }),
+                             value: number(key.reduce(table.values) { |row, k| row[k] }))
+        end)
+      end
+
+      # A permutation → +StructureDecl+, its start and precedences counted from 1.
+      #
+      # @param permutation [Quicopt::Permutation]
+      # @return [PB::StructureDecl]
+      def structure_decl(permutation)
+        PB::StructureDecl.new(
+          name: permutation.name, kind: "permutation", size: permutation.size,
+          start: (permutation.start || []).map { |k| k + 1 }, fixed: false,
+          precede: permutation.precedences.map { |a, b| PB::Precedence.new(before: a + 1, after: b + 1) }
+        )
       end
 
       # One DSL constraint row → one constraint in the message.

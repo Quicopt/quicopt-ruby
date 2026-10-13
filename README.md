@@ -24,6 +24,9 @@ There is no solver on your machine. The service does the solving.
   and method, with examples.
 - [`Quicopt::Model`](https://quicopt.github.io/quicopt-ruby/Quicopt/Model.html) —
   variables, constraints, objective.
+- [`Quicopt::Permutation`](https://quicopt.github.io/quicopt-ruby/Quicopt/Permutation.html)
+  and [`Quicopt::LookupTable`](https://quicopt.github.io/quicopt-ruby/Quicopt/LookupTable.html) —
+  orders as decisions, and data read along them.
 - [`Quicopt::Client`](https://quicopt.github.io/quicopt-ruby/Quicopt/Client.html) —
   sending a model, API keys, long-running jobs, errors.
 - [`Quicopt::Result`](https://quicopt.github.io/quicopt-ruby/Quicopt/Result.html) —
@@ -240,6 +243,48 @@ Two consequences of that, both deliberate:
 
 Chained comparisons (`1 <= x <= 5`) are not a thing in Ruby. Add two rows.
 
+## Choosing an order
+
+Some decisions are orders: the route a van drives through its stops, or the sequence in which a machine works through its jobs. Declare such an order with `permutation`, and read data along it with a lookup table. Here are five stops along a road; find the shortest route through all of them that visits stop 3 before stop 0:
+
+```ruby
+position = [0, 3, 1, 4, 2]                    # km along the road, stops 0 to 4
+
+m = Quicopt::Model.new
+dist  = m.lookup_table("dist", position.map { |a| position.map { |b| (a - b).abs } })
+route = m.permutation("route", 5)
+route.precede(3, 0)                           # stop 3 is visited before stop 0
+m.minimize((0...4).sum { |k| dist[route.item_at(k), route.item_at(k + 1)] })
+
+result = Quicopt::Client.new.solve(m)
+result.objective                              # 4.0
+result.structures["route"].item_at            # [3, 1, 4, 2, 0]: the stops in the order visited
+```
+
+A permutation places `n` items in `n` slots, one item per slot, both counted from 0. Here the items are the stops and the slots are the visits, so slot 0 holds the first stop visited:
+
+- `route.item_at(k)` is the stop in slot `k`: `route.item_at(0)` is the first stop visited.
+- `route.slot_of(i)` is the slot of stop `i`: when it is visited.
+- `route.precede(a, b)` requires stop `a` to be visited before stop `b`. Every solution meets every such requirement.
+- `start:` gives the order the service's search starts from: `m.permutation("route", 5, start: [4, 3, 2, 1, 0])` starts with stop 0 in slot 4, stop 1 in slot 3, and so on.
+
+The result holds each permutation's order both ways round, again counted from 0: `item_at`, the item in each slot, and `slot_of`, the slot of each item. Orders are found by a search, which cannot prove that no better order exists, so a model with a permutation comes back with the status `"heuristic"`.
+
+A Ruby array cannot be indexed by a decision the service has not made yet, such as which stop comes first; a lookup table can. `dist[route.item_at(k), route.item_at(k + 1)]` is the length of the leg from the `k`-th stop to the next, whichever stops those turn out to be. A table is a vector, indexed `table[i]`, or a matrix, indexed `table[i, j]`. Indexed by whole numbers only, it gives the entry itself (`dist[0, 1]` is `3.0`). It can also be indexed by an integer variable, to read the entry the service picks:
+
+```ruby
+m = Quicopt::Model.new
+price  = m.lookup_table("price", [3.0, 1.0, 4.0, 1.5])
+choice = m.int_var(0, 3, "choice")
+m.minimize(price[choice])
+
+result = Quicopt::Client.new.solve(m)
+result.solution                               # {"choice" => 1.0}: option 1 is the cheapest
+result.objective                              # 1.0
+```
+
+A value read from a permutation or a table counts as one factor in an expression, like a variable: `2 * dist[i, j]` is linear and `x * dist[i, j]` is quadratic. The whole table is sent with the model, so a very large table makes the request large.
+
 ## The encoded model
 
 `solve` encodes the model for you, but the encoded form is not hidden. Inspect it,
@@ -288,6 +333,15 @@ one key can be attributed per project. It rides the query string and is never
 baked into the model.
 
 **Large models.** `solve(model, gzip: true)` compresses the request body.
+
+**Time limit.** The service chooses how long a solve may run. `time_limit:` sets that time instead, in seconds. A solver that proves its answer sooner still stops sooner; a search, which cannot prove it is done, runs for all of it:
+
+```ruby
+result = client.solve(m, time_limit: 30)
+result.solver_data["time_budget_s"]    # 30.0: the time the service granted
+```
+
+The service grants at most its maximum (120 s on the free tier). Asked for more, it runs for its maximum, and the client warns that the solve got less time than requested. `submit` takes `time_limit:` too, and `job.result` then waits at least that long.
 
 **Asynchronous solving.** Use this for the first call against a server that may
 still be warming up, where a blocking call could time out:

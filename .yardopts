@@ -4,6 +4,7 @@
 --no-private
 --hide-void-return
 --exclude lib/quicopt/modeler
-lib/**/*.rb
+lib/quicopt/**/*.rb
+lib/quicopt.rb
 -
 LICENSE
