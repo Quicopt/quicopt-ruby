@@ -5,6 +5,7 @@
 require_relative "quicopt/version"
 require_relative "quicopt/model"
 require_relative "quicopt/structured"
+require_relative "quicopt/indicators"
 require_relative "quicopt/wire"
 require_relative "quicopt/client"
 

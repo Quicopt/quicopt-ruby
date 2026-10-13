@@ -57,14 +57,20 @@ module Quicopt
   # +slot_of[i]+ the slot of item +i+.
   Arrangement = Data.define(:item_at, :slot_of)
 
+  # The assignment the service found for one partition (see +Model#partition+),
+  # parts counted from 0: +part_of[i]+ is the part of item +i+ and +size_of[b]+
+  # the number of items in part +b+.
+  Grouping = Data.define(:part_of, :size_of)
+
   # A finished solve, parsed from the service's result JSON.
   #
   # +objective+ and +feasible+ are +nil+ where the outcome leaves them undefined —
   # a model with nothing to feasibility-check, or a run that found no solution.
   # +display+ is the framed, ready-to-print summary the service renders the same
   # way for every kind of model — print it rather than formatting your own.
-  # +structures+ holds the +Arrangement+ of each permutation the model declares,
-  # by name, and is empty for a model with none.
+  # +structures+ holds the +Arrangement+ of each permutation and the +Grouping+
+  # of each partition the model declares, by name, and is empty for a model with
+  # none.
   Result = Data.define(:job_id, :status, :objective, :feasible, :solution,
                        :solve_time_seconds, :solver_data, :display, :structures) do
     # Build a +Result+ from the service's decoded result JSON.
@@ -86,12 +92,17 @@ module Quicopt
           structures: (body["structures"] || {}).transform_values { |s| arrangement(s) })
     end
 
-    # One permutation's arrangement from the result JSON, where items and slots
-    # count from 1, or +nil+ when no arrangement came back.
+    # One structure's value from the result JSON, where items, slots and parts
+    # count from 1: a permutation's +Arrangement+, a partition's +Grouping+, or
+    # +nil+ when none came back.
     #
     # @api private
     def self.arrangement(json)
       return nil if json.nil?
+      if json.key?("part_of")
+        return Grouping.new(part_of: json["part_of"].map { |b| b.to_i - 1 },
+                            size_of: json["size_of"].map(&:to_i))
+      end
 
       Arrangement.new(item_at: json["item_at"].map { |i| i.to_i - 1 },
                       slot_of: json["slot_of"].map { |k| k.to_i - 1 })

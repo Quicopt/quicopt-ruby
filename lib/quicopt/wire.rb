@@ -22,14 +22,20 @@ require_relative "modeler/v1/program_pb"
 # A unit coefficient is dropped rather than emitted as +1 * e+, an additive zero
 # constant is dropped from a sum, and a sum of one term is that term.
 #
-# Permutations and lookup tables count from 0 in the DSL and from 1 on the wire,
-# and this file is the one place that shifts between the two:
+# Permutations, partitions and lookup tables count from 0 in the DSL and from 1
+# on the wire, and this file is the one place that shifts between the two:
 #
 #   route.item_at(k)  ⇒  item_at(k + 1, route) − 1
+#   teams.part_of(i)  ⇒  part_of(i + 1, teams) − 1
+#   teams.size_of(b)  ⇒  size_of(b + 1, teams)      (a count: not shifted)
 #   dist[i, j]        ⇒  dist[i + 1, j + 1]
 #
-# A read of a permutation used as a table position meets both shifts, and they
-# cancel: +dist[route.item_at(0), …]+ goes out as +dist[item_at(1, route), …]+.
+# A read used as a table position meets both shifts, and they cancel:
+# +dist[route.item_at(0), …]+ goes out as +dist[item_at(1, route), …]+.
+#
+# The terms that switch (+quicopt/indicators+) go out as the catalog's
+# +indicator+, +step+, +min+ and +max+; a +min+ or +max+ of more than two
+# arguments as nested binary ones, folded from the left.
 #
 # Note on byte-level comparison: protobuf omits fields that hold their default
 # value (+start: 0.0+) and does not fix the order of map entries, so two encodings
@@ -56,7 +62,8 @@ module Quicopt
           objective: expression(model.objective),
           sense: model.sense,
           constraints: model.constraints.map { |c| constraint(c) },
-          structures: model.permutations.sort_by(&:name).map { |p| structure_decl(p) }
+          structures: (model.permutations + model.partitions).sort_by(&:name).map { |p| structure_decl(p) },
+          blocks: model.blocks.sort_by(&:name).map { |b| block_decl(b) }
         )
       end
 
@@ -150,10 +157,12 @@ module Quicopt
         sum(terms)
       end
 
-      # One factor of a term: a variable, or a read of a permutation or a lookup
-      # table, each standing for its value counted from 0.
+      # One factor of a term: a variable, a read of a permutation, partition or
+      # lookup table (each standing for its value counted from 0), or a term
+      # that switches.
       #
-      # @param factor [Quicopt::Variable, Quicopt::Placement, Quicopt::TableEntry]
+      # @param factor [Quicopt::Variable, Quicopt::Placement, Quicopt::PartRead,
+      #   Quicopt::TableEntry, Quicopt::Condition, Quicopt::Extremum]
       # @return [PB::Expression]
       def factor(factor)
         case factor
@@ -161,8 +170,37 @@ module Quicopt
         when Placement
           apply("-", [apply(factor.op.to_s, [const(factor.position + 1), structure(factor.permutation.name)]),
                       const(1.0)])
+        when PartRead then part_read(factor)
         when TableEntry then table(factor.table.name, factor.index.map { |e| one_based(e) })
+        when Condition then condition(factor)
+        when Extremum
+          factor.args.map { |a| expression(a) }.reduce { |acc, e| apply(factor.op.to_s, [acc, e]) }
         else raise Error, "unknown factor #{factor.inspect}"
+        end
+      end
+
+      # A read of a partition: the part, shifted to count from 0; the size, a
+      # count, as it is.
+      #
+      # @param read [Quicopt::PartRead]
+      # @return [PB::Expression]
+      def part_read(read)
+        node = apply(read.op.to_s, [const(read.position + 1), structure(read.partition.name)])
+        read.op == :part_of ? apply("-", [node, const(1.0)]) : node
+      end
+
+      # A 0/1 term: +indicator(e)+, +step(e)+, or +step(tol − abs(e))+ for a
+      # comparison with a tolerance.
+      #
+      # @param cond [Quicopt::Condition]
+      # @return [PB::Expression]
+      def condition(cond)
+        arg = expression(cond.argument)
+        case cond.op
+        when :indicator then apply("indicator", [arg])
+        when :step then apply("step", [arg])
+        when :near then apply("step", [apply("-", [const(cond.tol), apply("abs", [arg])])])
+        else raise Error, "unknown condition #{cond.op.inspect}"
         end
       end
 
@@ -195,16 +233,31 @@ module Quicopt
         end)
       end
 
-      # A permutation → +StructureDecl+, its start and precedences counted from 1.
+      # A permutation or a partition → +StructureDecl+, its start (and a
+      # permutation's precedences) counted from 1.
       #
-      # @param permutation [Quicopt::Permutation]
+      # @param structure [Quicopt::Permutation, Quicopt::Partition]
       # @return [PB::StructureDecl]
-      def structure_decl(permutation)
+      def structure_decl(structure)
+        start = (structure.start || []).map { |k| k + 1 }
+        if structure.is_a?(Partition)
+          return PB::StructureDecl.new(name: structure.name, kind: "partition", size: structure.size,
+                                       start: start, fixed: false, parts: structure.parts)
+        end
+
         PB::StructureDecl.new(
-          name: permutation.name, kind: "permutation", size: permutation.size,
-          start: (permutation.start || []).map { |k| k + 1 }, fixed: false,
-          precede: permutation.precedences.map { |a, b| PB::Precedence.new(before: a + 1, after: b + 1) }
+          name: structure.name, kind: "permutation", size: structure.size, start: start, fixed: false,
+          precede: structure.precedences.map { |a, b| PB::Precedence.new(before: a + 1, after: b + 1) }
         )
+      end
+
+      # A block → +BlockDecl+: its name and its variables, in the order given.
+      #
+      # @param block [Quicopt::Block]
+      # @return [PB::BlockDecl]
+      def block_decl(block)
+        PB::BlockDecl.new(name: block.name,
+                          members: block.variables.map { |v| PB::VarRef.new(name: v.name, index: PB::Index.new) })
       end
 
       # One DSL constraint row → one constraint in the message.
@@ -225,7 +278,8 @@ module Quicopt
       # A variable declaration → +VarDecl+. Bounds are plain numbers (the message
       # can also take a bound from a parameter table, but that needs indexed
       # variables, which this DSL does not have); ±Inf passes straight through and
-      # means "unbounded in that direction".
+      # means "unbounded in that direction". A variable that may also be 0 goes
+      # out with its domain, +SEMICONTINUOUS+ or +SEMIINTEGER+.
       #
       # @param variable [Quicopt::Variable]
       # @return [PB::VarDecl]

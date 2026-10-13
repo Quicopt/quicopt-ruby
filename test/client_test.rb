@@ -316,6 +316,14 @@ class ClientTest < Minitest::Test
     end
   end
 
+  def test_a_grouping_counts_parts_from_zero_and_sizes_as_given
+    body = RESULT.merge("structures" => { "teams" => { "part_of" => [1, 2, 2, 1, 2], "size_of" => [2, 3] } })
+    StubServer.run(->(_req) { json_ok(body) }) do |server|
+      teams = Quicopt::Client.new(server.base_url).solve(@m).structures["teams"]
+      assert_equal Quicopt::Grouping.new(part_of: [0, 1, 1, 0, 1], size_of: [2, 3]), teams
+    end
+  end
+
   def test_an_error_carries_the_status_reason_and_display
     body = { "error" => "model too large", "reason" => "size_exceeded",
              "display" => "framed error", "contact" => "olaf@quicopt.com" }

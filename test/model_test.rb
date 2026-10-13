@@ -87,8 +87,14 @@ class ModelTest < Minitest::Test
     assert_raises(Quicopt::UnsupportedExpression) { @x**0.5 }
   end
 
-  def test_disequality_raises_rather_than_answering_false
-    assert_raises(Quicopt::UnsupportedExpression) { @x != 3 }
+  def test_disequality_is_a_comparison_rather_than_false
+    ne = @x != 3
+    assert_instance_of Quicopt::Constraint, ne                   # never a silent `false`
+    assert_equal :ne, ne.sense
+    assert_raises(ArgumentError) { @m.add(ne) }                  # no row can hold it
+    assert_raises(ArgumentError) { @m.add(@x < 3) }
+    assert_raises(ArgumentError) { @m.add(@x > 3) }
+    assert(@x != nil)                                            # anything else compares by identity
   end
 
   def test_non_numeric_operands_raise
