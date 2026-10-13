@@ -2,14 +2,16 @@
 # SPDX-FileCopyrightText: (c) 2026 Tim Bode, PGI-12, Forschungszentrum Jülich
 # frozen_string_literal: true
 
-# quicopt/structured — orders as decisions (+Permutation+) and data read at
-# decided positions (+LookupTable+).
+# quicopt/structured — orders as decisions (+Permutation+), assignments to
+# groups as decisions (+Partition+) and data read at decided positions
+# (+LookupTable+).
 #
-# Both are declared on a +Model+ (+Model#permutation+, +Model#lookup_table+) and
-# enter its expressions as *reads*: +route.item_at(0)+ is an +Expression+ whose one
-# linear term is a +Placement+, +dist[i, j]+ one whose term is a +TableEntry+. A
-# read takes a variable's place in the collected polynomial — it is a factor of
-# degree 1 — so the degree check stays exact and the arithmetic needs no new
+# All three are declared on a +Model+ (+Model#permutation+, +Model#partition+,
+# +Model#lookup_table+) and enter its expressions as *reads*: +route.item_at(0)+
+# is an +Expression+ whose one linear term is a +Placement+, +teams.part_of(2)+
+# one whose term is a +PartRead+, +dist[i, j]+ one whose term is a +TableEntry+.
+# A read takes a variable's place in the collected polynomial — it is a factor
+# of degree 1 — so the degree check stays exact and the arithmetic needs no new
 # cases.
 #
 # Reads are interned: asking twice for the same read returns the same object.
@@ -17,8 +19,8 @@
 # +route.item_at(0) - route.item_at(0)+ cancel and +x * dist[i, j]+ meet
 # +dist[i, j] * x+ on one coefficient.
 #
-# The DSL counts items, slots and table positions from 0, like Ruby; the service
-# counts them from 1. The shift happens once, in +Quicopt::Wire+: a read stands for
+# The DSL counts items, slots, parts and table positions from 0, like Ruby; the
+# service counts them from 1. A part's size is a count and is never shifted. The shift happens once, in +Quicopt::Wire+: a read stands for
 # its 0-based value everywhere on this side, so +to_s+ prints what the user wrote.
 
 module Quicopt
@@ -167,6 +169,74 @@ module Quicopt
     end
   end
 
+  # A partition declared by +Model#partition+: +size+ items in +parts+ parts,
+  # both numbered from 0. Read it with +part_of+ and +size_of+.
+  #
+  #   teams = m.partition("teams", 6, 2)
+  #   teams.part_of(4)     # the team person 4 joins
+  #   teams.size_of(0)     # how many people team 0 has
+  class Partition
+    # @return [Model] the model that declared this partition
+    attr_reader :model
+    # @return [String] the partition's name; its assignment comes back keyed by it
+    attr_reader :name
+    # @return [Integer] the number of items
+    attr_reader :size
+    # @return [Integer] the number of parts
+    attr_reader :parts
+    # @return [Array<Integer>, nil] the part each item starts in, or +nil+ for the
+    #   default (item +i+ in part +i % parts+)
+    attr_reader :start
+
+    # Declared with +Model#partition+, not built directly.
+    #
+    # @api private
+    def initialize(model, name, size, parts, start)
+      @model = model
+      @name = name
+      @size = size
+      @parts = parts
+      @start = start&.freeze
+      @reads = {}
+    end
+
+    # The part item +item+ is in, an expression whose value the service
+    # chooses. Index a +LookupTable+ with it to read data about that part.
+    #
+    # @param item [Integer] from 0 to +size - 1+
+    # @return [Expression]
+    # @raise [TypeError, ArgumentError] if +item+ is not one of the items
+    def part_of(item)
+      read(:part_of, Positions.check(item, @size, "item", owner))
+    end
+
+    # The number of items in part +part+, an expression whose value the service
+    # chooses: a count from 0 to +size+.
+    #
+    # @param part [Integer] from 0 to +parts - 1+
+    # @return [Expression]
+    # @raise [TypeError, ArgumentError] if +part+ is not one of the parts
+    def size_of(part)
+      read(:size_of, Positions.check(part, @parts, "part", owner))
+    end
+
+    # @return [String] name and sizes
+    def inspect
+      "#<Quicopt::Partition #{@name} (#{@size} items in #{@parts} parts)>"
+    end
+
+    private
+
+    def owner
+      "partition #{@name.inspect}"
+    end
+
+    def read(op, position)
+      entry = (@reads[[op, position]] ||= PartRead.new(self, op, position, @model.next_order))
+      Expression.new(linear: { entry => 1.0 })
+    end
+  end
+
   # A table of data declared by +Model#lookup_table+, to be indexed with
   # expressions: +table[i]+ for a vector, +table[i, j]+ for a matrix, positions
   # counted from 0.
@@ -289,6 +359,44 @@ module Quicopt
     # @return [String] the read as written, e.g. +route.item_at(0)+
     def to_s
       "#{@permutation.name}.#{@op}(#{@position})"
+    end
+  end
+
+  # A read of a partition: the part of an item (counted from 0), or the number
+  # of items in a part. One factor of an +Expression+.
+  #
+  # @api private
+  class PartRead
+    # @return [Partition]
+    attr_reader :partition
+    # @return [Symbol] +:part_of+ or +:size_of+
+    attr_reader :op
+    # @return [Integer] the item (for +:part_of+) or the part (for +:size_of+)
+    attr_reader :position
+    # @return [Array] where this term sorts among a model's terms
+    attr_reader :order
+
+    def initialize(partition, op, position, order)
+      @partition = partition
+      @op = op
+      @position = position
+      @order = order
+      freeze
+    end
+
+    # @return [Model]
+    def model
+      @partition.model
+    end
+
+    # @return [Array<Variable>] none: a read of a partition involves no variable
+    def variables
+      []
+    end
+
+    # @return [String] the read as written, e.g. +teams.part_of(2)+
+    def to_s
+      "#{@partition.name}.#{@op}(#{@position})"
     end
   end
 

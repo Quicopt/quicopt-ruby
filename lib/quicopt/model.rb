@@ -18,9 +18,10 @@
 #
 # Only flat (unindexed) variables exist here. The message format also carries
 # index sets and quantified constraints; the Ruby DSL deliberately does not — the
-# Python and Julia clients reach those. It does carry permutations and lookup
-# tables (+quicopt/structured+), whose reads enter an +Expression+ as factors of
-# degree 1, alongside the variables.
+# Python and Julia clients reach those. It does carry permutations, partitions
+# and lookup tables (+quicopt/structured+) and terms that switch
+# (+quicopt/indicators+), which enter an +Expression+ as factors of degree 1,
+# alongside the variables.
 
 module Quicopt
   # Base class of every error this gem raises.
@@ -129,6 +130,21 @@ module Quicopt
       Constraint.build(self, other, :ge)
     end
 
+    # A strict comparison, for +Quicopt.holds+ only: no constraint row can be
+    # strict, so +Model#add+ refuses it.
+    #
+    # @return [Constraint] the comparison +self < other+
+    def <(other)
+      Constraint.build(self, other, :lt)
+    end
+
+    # A strict comparison, for +Quicopt.holds+ only (see +<+).
+    #
+    # @return [Constraint] the comparison +self > other+
+    def >(other)
+      Constraint.build(self, other, :gt)
+    end
+
     # Builds an *equality row*, not a boolean — +x == 5+ is a constraint.
     #
     # A non-numeric, non-expression operand falls back to identity, so an
@@ -143,16 +159,15 @@ module Quicopt
       Constraint.build(self, other, :eq)
     end
 
-    # Quicopt has no "not equal to" constraint, and Ruby would otherwise derive
-    # +!=+ from +==+ and silently answer +false+ for every row.
+    # A "not equal to" comparison, for +Quicopt.holds+ only: +Model#add+ refuses
+    # it as a row. Defined so that Ruby does not derive +!=+ from +==+ and
+    # silently answer +false+.
     #
-    # @raise [UnsupportedExpression] always, for an expression-like operand
+    # @return [Constraint, Boolean]
     def !=(other)
       return !equal?(other) unless Expression.castable?(other)
 
-      raise UnsupportedExpression,
-            "!= is not a constraint Quicopt can express; model it with a binary " \
-            "variable and two big-M rows"
+      Constraint.build(self, other, :ne)
     end
 
     # Lets Ruby fold a numeric on the left into an expression, so +3 * x+ and
@@ -177,7 +192,9 @@ module Quicopt
     attr_reader :model
     # @return [String] the variable's name; solutions come back keyed by it
     attr_reader :name
-    # @return [Symbol] +:CONTINUOUS+, +:INTEGER+ or +:BINARY+
+    # @return [Symbol] +:CONTINUOUS+, +:INTEGER+, +:BINARY+, or one of the two
+    #   domains that also allow 0: +:SEMICONTINUOUS+ (0 or any value within the
+    #   bounds) and +:SEMIINTEGER+ (0 or a whole number within them)
     attr_reader :domain
     # @return [Float] the lower bound (may be +-Float::INFINITY+)
     attr_reader :lower
@@ -202,6 +219,20 @@ module Quicopt
     # @return [Expression] this variable as a degree-1 expression
     def to_expr
       Expression.new(linear: { self => 1.0 })
+    end
+
+    # Whether the variable is in use: 1 when its value is not 0, else 0. Made
+    # for a variable declared with +semi: true+, which is 0 or within its
+    # bounds: a delivery of either nothing or 10 to 25 units, say. A fee per
+    # delivery is then
+    #
+    #   fee * ship.active
+    #
+    # and a model that is otherwise linear stays one the service solves exactly.
+    #
+    # @return [Expression] a 0/1 expression
+    def active
+      Conditions.term(:indicator, to_expr)
     end
 
     # Where this variable sorts among its model's terms: before every read of a
@@ -362,7 +393,7 @@ module Quicopt
     # Every factor of every term — variables and reads of permutations and lookup
     # tables — in first-use order.
     #
-    # @return [Array<Variable, Placement, TableEntry>]
+    # @return [Array<Variable, Placement, TableEntry, Condition, Extremum>]
     # @api private
     def factors
       seen = @linear.keys
@@ -428,13 +459,19 @@ module Quicopt
   # +Quicopt::Wire+ then splits that into the body (the variable terms) and the
   # numeric +bound+ (the constant, moved to the other side), which is the form
   # Quicopt sends.
+  #
+  # A comparison built with +<+, +>+ or +!=+ is not a row — +Model#add+ refuses it
+  # — but it can be turned into a 0/1 expression with +Quicopt.holds+.
   class Constraint
     # The comparison operator each sense renders as.
-    SENSES = { le: "<=", ge: ">=", eq: "==" }.freeze
+    SENSES = { le: "<=", ge: ">=", eq: "==", lt: "<", gt: ">", ne: "!=" }.freeze
+    # The senses a constraint row can have.
+    ROWS = %i[le ge eq].freeze
 
     # @return [Expression] the residual +lhs - rhs+
     attr_reader :expr
-    # @return [Symbol] +:le+, +:ge+ or +:eq+
+    # @return [Symbol] +:le+, +:ge+ or +:eq+ for a row; +:lt+, +:gt+ or +:ne+ for
+    #   a comparison only +Quicopt.holds+ takes
     attr_reader :sense
 
     # Build a row from the two sides of a comparison.
@@ -498,13 +535,20 @@ module Quicopt
     attr_reader :permutations
     # @return [Array<LookupTable>] the declared lookup tables, in declaration order
     attr_reader :tables
+    # @return [Array<Partition>] the declared partitions, in declaration order
+    attr_reader :partitions
+    # @return [Array<Block>] the declared blocks, in declaration order
+    attr_reader :blocks
 
     def initialize
       @variables = []
       @by_name = {}
       @permutations = []
+      @partitions = []
       @tables = []
+      @blocks = []
       @structured = {}
+      @interned = {}
       @reads = 0
       @constraints = []
       @objective = Expression.new
@@ -513,14 +557,21 @@ module Quicopt
 
     # Declare a continuous variable.
     #
+    # With +semi: true+ the variable is 0 or within its bounds, never in between:
+    # a shipment of either nothing or 2.5 to 8 tonnes. Such a variable is called
+    # semicontinuous. Its bounds must then be finite, and when 0 lies within them
+    # it is an ordinary variable.
+    #
     # @param lower [Numeric, nil] the lower bound; +nil+ means unbounded below
     # @param upper [Numeric, nil] the upper bound; +nil+ means unbounded above
     # @param name [String, nil] the variable's name; auto-generated when omitted
     # @param start [Numeric, nil] the starting point; defaults to 0 clamped into
-    #   the bounds, matching the Python and Julia clients
+    #   the bounds, matching the Python and Julia clients (to 0 with +semi+)
+    # @param semi [Boolean] whether the variable may also be 0
     # @return [Variable]
-    def num_var(lower = nil, upper = nil, name = nil, start: nil)
-      declare(:CONTINUOUS, lower, upper, name, start)
+    # @raise [ArgumentError] with +semi+, if a bound is missing or infinite
+    def num_var(lower = nil, upper = nil, name = nil, start: nil, semi: false)
+      declare(semi ? :SEMICONTINUOUS : :CONTINUOUS, lower, upper, name, start)
     end
 
     # Declare an integer variable.
@@ -529,11 +580,23 @@ module Quicopt
     # integer one — the same rule the Python and Julia clients apply, so the same
     # model means the same thing whichever language wrote it.
     #
+    # With +semi: true+ the variable is 0 or a whole number within its bounds,
+    # never in between: a delivery of either nothing or 10 to 25 units. Such a
+    # variable is called semi-integer. Its bounds must then be finite.
+    #
+    #   ship = m.int_var(10, 25, "ship", semi: true)   # none, or 10 to 25 units
+    #   m.minimize(2 * ship + 30 * ship.active)         # 2 per unit, 30 per delivery
+    #
+    # @param semi [Boolean] whether the variable may also be 0
     # @return [Variable]
-    def int_var(lower = nil, upper = nil, name = nil, start: nil)
+    # @raise [ArgumentError] with +semi+, if a bound is missing or infinite
+    def int_var(lower = nil, upper = nil, name = nil, start: nil, semi: false)
       lo = coerce_bound(lower, -Float::INFINITY)
       hi = coerce_bound(upper, Float::INFINITY)
-      domain = lo.zero? && hi == 1.0 ? :BINARY : :INTEGER
+      domain = if semi then :SEMIINTEGER
+               elsif lo.zero? && hi == 1.0 then :BINARY
+               else :INTEGER
+               end
       declare(domain, lo, hi, name, start)
     end
 
@@ -598,6 +661,96 @@ module Quicopt
       @structured[nm] = permutation
     end
 
+    # Declare an assignment of +n+ items to +parts+ parts as a decision: which
+    # team each person joins, which truck each parcel rides in. Items and parts
+    # are both numbered from 0, and a part may stay empty.
+    #
+    # Six players of strengths 7, 5, 4, 3, 2 and 1 form a team of four and a
+    # team of two, as evenly matched as possible:
+    #
+    #   strength = [7, 5, 4, 3, 2, 1]                  # of players 0 to 5
+    #   m = Quicopt::Model.new
+    #   teams = m.partition("teams", 6, 2)             # 6 players into teams 0 and 1
+    #   total = (0...2).map { |t| (0...6).sum { |p| strength[p] * Quicopt.holds(teams.part_of(p) == t) } }
+    #   m.add(teams.size_of(0) == 4)                   # team 0 has four players
+    #   m.minimize(Quicopt.max(total[0], total[1]))
+    #
+    #   result = Quicopt::Client.new.solve(m)
+    #   result.objective                               # 11.0
+    #   result.structures["teams"].part_of             # [1, 0, 1, 0, 0, 0]: players 0 and 2 form team 1
+    #
+    # @param name [String, Symbol] identifies the partition in the result, as
+    #   +result.structures[name]+; shares one namespace with the model's
+    #   variables, permutations and lookup tables
+    # @param n [Integer] the number of items, at least 1
+    # @param parts [Integer] the number of parts, at least 2
+    # @param start [Array<Integer>, nil] the assignment the service's search
+    #   starts from: +start[i]+ is the part of item +i+, one of +0...parts+.
+    #   Left out, item +i+ starts in part +i % parts+.
+    # @return [Partition]
+    # @raise [TypeError] if +n+ or +parts+ is not an Integer
+    # @raise [ArgumentError] if +n+ is below 1, +parts+ below 2, the name is
+    #   taken, or +start+ does not give each item a part
+    def partition(name, n, parts, start: nil)
+      raise TypeError, "a partition's number of items is a whole number, got #{n.inspect}" unless n.is_a?(Integer)
+      raise TypeError, "a partition's number of parts is a whole number, got #{parts.inspect}" unless parts.is_a?(Integer)
+      raise ArgumentError, "a partition has at least 1 item, got #{n}" if n < 1
+      raise ArgumentError, "a partition has at least 2 parts, got #{parts}" if parts < 2
+
+      nm = claim(name)
+      unless start.nil? || (start.is_a?(Array) && start.size == n && start.all? { |b| b.is_a?(Integer) && b >= 0 && b < parts })
+        raise ArgumentError, "partition #{nm.inspect}: start gives each of the #{n} items a part " \
+                             "from 0 to #{parts - 1}"
+      end
+      partition = Partition.new(self, nm, n, parts, start&.dup)
+      @partitions << partition
+      @structured[nm] = partition
+    end
+
+    # Declare the variables of one subproblem as a block: one customer's
+    # supply, one project's staffing. The constraints over a block's own
+    # variables alone, such as that customer's demand, hold in every solution
+    # the service returns. A block changes nothing else about the model: the
+    # same solutions are feasible and the objective is the same.
+    #
+    #   supply = (0...3).map { |w| m.int_var(10, 25, "ship_#{w}", semi: true) }
+    #   m.block("customer", supply)
+    #
+    # @param name [String, Symbol] the block's name, distinct from every other
+    #   block's
+    # @param vars [Array<Variable>] its variables, each with finite bounds and in
+    #   no other block
+    # @return [Block]
+    # @raise [TypeError] if a member is not a variable
+    # @raise [ArgumentError] if the block is empty, the name is taken, a member
+    #   belongs to another model or block or has an infinite bound
+    def block(name, vars)
+      raise TypeError, "a block's name is a String or a Symbol, got #{name.inspect}" unless name.is_a?(String) || name.is_a?(Symbol)
+
+      nm = name.to_s
+      raise ArgumentError, "a block's name cannot be empty" if nm.empty?
+      raise ArgumentError, "there is already a block named #{nm.inspect}" if @blocks.any? { |b| b.name == nm }
+
+      members = Array(vars)
+      raise ArgumentError, "block #{nm.inspect} has no variables" if members.empty?
+
+      members.each_with_index do |v, k|
+        raise TypeError, "block #{nm.inspect}: a member is a variable, got #{v.class}" unless v.is_a?(Variable)
+        raise ArgumentError, "variable #{v.name.inspect} belongs to a different Quicopt::Model" unless v.model.equal?(self)
+        raise ArgumentError, "variable #{v.name.inspect} is listed twice in block #{nm.inspect}" if members[0...k].any? { |u| u.equal?(v) }
+        if (owner = @blocks.find { |b| b.variables.any? { |u| u.equal?(v) } })
+          raise ArgumentError, "variable #{v.name.inspect} is already in block #{owner.name.inspect}"
+        end
+        unless v.lower.finite? && v.upper.finite?
+          raise ArgumentError, "variable #{v.name.inspect} has bounds [#{v.lower}, #{v.upper}]; " \
+                               "a block's variables need finite bounds"
+        end
+      end
+      block = Block.new(nm, members.dup.freeze)
+      @blocks << block
+      block
+    end
+
     # Declare a table of data that can be indexed by decisions. A model sometimes
     # needs a number from a table at a position that is not known yet: the distance
     # between the first and the second stop of a route whose order the service is
@@ -632,12 +785,21 @@ module Quicopt
       @structured[nm] = table
     end
 
-    # The +order+ of the next read of a permutation or lookup table: after every
-    # variable, then in the order the reads were first made.
+    # The +order+ of the next read of a permutation, partition or lookup table,
+    # or of a term that switches: after every variable, then in the order they
+    # were first made.
     #
     # @api private
     def next_order
       [1, @reads += 1]
+    end
+
+    # The term stored under +key+, built by the block on first use, so that
+    # equal terms are one object.
+    #
+    # @api private
+    def intern(key)
+      @interned[key] ||= yield
     end
 
     # Minimize +expr+.
@@ -660,10 +822,17 @@ module Quicopt
     # @return [Constraint] the row just added
     # @raise [TypeError] if handed something that is not a constraint — most
     #   often a bare expression, or a comparison Ruby already reduced to a boolean
+    # @raise [ArgumentError] for a comparison with +<+, +>+ or +!=+, which no row
+    #   can express
     def add(constraint)
       unless constraint.is_a?(Constraint)
         raise TypeError,
               "add expects a constraint such as `x + y <= 5`, got #{constraint.class}"
+      end
+      unless Constraint::ROWS.include?(constraint.sense)
+        raise ArgumentError,
+              "#{constraint} is not a constraint Quicopt can hold: use <=, >= or ==, " \
+              "or turn the comparison into a 0/1 expression with Quicopt.holds"
       end
       check_ownership(constraint.expr)
       @constraints << constraint
@@ -690,13 +859,17 @@ module Quicopt
       lines << "subject to" unless @constraints.empty?
       @constraints.each { |c| lines << "  #{c}" }
       @variables.each do |v|
-        lines << "  #{v.name} in #{v.domain} [#{Format.number(v.lower)}, #{Format.number(v.upper)}]"
+        range = "[#{Format.number(v.lower)}, #{Format.number(v.upper)}]"
+        range = "{0} ∪ #{range}" if %i[SEMICONTINUOUS SEMIINTEGER].include?(v.domain)
+        lines << "  #{v.name} in #{v.domain} #{range}"
       end
       @permutations.each do |p|
         order = p.precedences.map { |a, b| ", #{a} before #{b}" }.join
         lines << "  #{p.name} orders items 0 to #{p.size - 1}#{order}"
       end
+      @partitions.each { |p| lines << "  #{p.name} puts items 0 to #{p.size - 1} in parts 0 to #{p.parts - 1}" }
       @tables.each { |t| lines << "  #{t.name} is a #{t.shape.join(' × ')} lookup table" }
+      @blocks.each { |b| lines << "  #{b.name} is a block of #{b.variables.join(', ')}" }
       lines.join("\n")
     end
 
@@ -711,6 +884,12 @@ module Quicopt
       lo = coerce_bound(lower, -Float::INFINITY)
       hi = coerce_bound(upper, Float::INFINITY)
       raise ArgumentError, "lower bound #{lo} exceeds upper bound #{hi}" if lo > hi
+
+      semi = %i[SEMICONTINUOUS SEMIINTEGER].include?(domain)
+      if semi && !(lo.finite? && hi.finite?)
+        raise ArgumentError, "a variable that is 0 or in [#{lo}, #{hi}] needs finite bounds"
+      end
+      start = 0.0 if semi && start.nil?
 
       nm = name.nil? ? auto_name : name.to_s
       raise ArgumentError, "duplicate variable name #{nm.inspect}" if @by_name.key?(nm)
@@ -806,6 +985,28 @@ module Quicopt
         what = f.is_a?(Variable) ? "variable #{f.name.inspect}" : f.to_s
         raise ArgumentError, "#{what} belongs to a different Quicopt::Model"
       end
+    end
+  end
+
+  # The variables of one subproblem, declared with +Model#block+.
+  class Block
+    # @return [String] the block's name
+    attr_reader :name
+    # @return [Array<Variable>] its variables, in the order given
+    attr_reader :variables
+
+    # Declared with +Model#block+, not built directly.
+    #
+    # @api private
+    def initialize(name, variables)
+      @name = name
+      @variables = variables
+      freeze
+    end
+
+    # @return [String] name and members
+    def inspect
+      "#<Quicopt::Block #{@name}: #{@variables.join(', ')}>"
     end
   end
 end

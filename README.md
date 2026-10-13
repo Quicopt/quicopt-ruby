@@ -285,6 +285,54 @@ result.objective                              # 1.0
 
 A value read from a permutation or a table counts as one factor in an expression, like a variable: `2 * dist[i, j]` is linear and `x * dist[i, j]` is quadratic. The whole table is sent with the model, so a very large table makes the request large.
 
+## Minimum loads, fees and groups
+
+A delivery is often either nothing or at least a minimum load. `semi: true` says so: `m.int_var(10, 25, "ship", semi: true)` is 0 or a whole number from 10 to 25 (`num_var` for any value in the range). `ship.active` is 1 when such a delivery takes place, so a fee per delivery is one term, and `Quicopt.holds` turns a comparison into 1 or 0, which charges a fee once a total reaches a level. `m.block` names the variables of one subproblem, such as one customer's deliveries; every solution the service returns satisfies the constraints over one block's variables alone. Three warehouses supply three customers:
+
+```ruby
+demand  = [40, 30, 20]                         # units, customers 0 to 2
+price   = [[1, 3, 4], [3, 1, 3], [4, 2, 1]]    # per unit, price[warehouse][customer]
+opening = [60, 50, 40]                         # fee of warehouses 0 to 2
+
+m = Quicopt::Model.new
+# ship[w][c]: the delivery from warehouse w to customer c, none or 10 to 25 units
+ship = (0...3).map { |w| (0...3).map { |c| m.int_var(10, 25, "ship_#{w}_#{c}", semi: true) } }
+(0...3).each do |c|
+  to_customer = (0...3).map { |w| ship[w][c] }
+  m.block("customer_#{c}", to_customer)
+  m.add(to_customer.sum >= demand[c])
+end
+m.minimize(
+  (0...3).sum { |w| (0...3).sum { |c| price[w][c] * ship[w][c] + 5 * ship[w][c].active } } +  # 5 per delivery
+  (0...3).sum { |w| opening[w] * Quicopt.holds(ship[w].sum >= 1) }                          # opening fee
+)
+
+result = Quicopt::Client.new.solve(m)
+result.objective                               # 300.0
+result.solution.select { |_, units| units > 0 }.sort.to_h
+# {"ship_0_0" => 25.0, "ship_0_1" => 10.0, "ship_2_0" => 15.0, "ship_2_1" => 20.0, "ship_2_2" => 20.0}
+```
+
+Warehouse 1 stays closed. Warehouse 0 sends its full 25 units to customer 0 and the minimum of 10 to customer 1; warehouse 2 covers the rest. `Quicopt.holds` takes `<=`, `>=`, `<`, `>`, `==` and `!=`, and `tol:` lets a comparison miss by that much and still count: `Quicopt.holds(spend >= 300, tol: 0.01)`. `Quicopt.min` and `Quicopt.max` give the smallest and the largest of several expressions.
+
+`m.partition` splits items into groups the way `permutation` orders them. Six players of strengths 7, 5, 4, 3, 2 and 1 form a team of four and a team of two, as evenly matched as possible:
+
+```ruby
+strength = [7, 5, 4, 3, 2, 1]                  # of players 0 to 5
+m = Quicopt::Model.new
+teams = m.partition("teams", 6, 2)             # 6 players into teams 0 and 1
+total = (0...2).map { |t| (0...6).sum { |p| strength[p] * Quicopt.holds(teams.part_of(p) == t) } }
+m.add(teams.size_of(0) == 4)                   # team 0 has four players
+m.minimize(Quicopt.max(total[0], total[1]))
+
+result = Quicopt::Client.new.solve(m)
+result.objective                               # 11.0
+result.structures["teams"].part_of             # [1, 0, 1, 0, 0, 0]: players 0 and 2 form team 1
+result.structures["teams"].size_of             # [4, 2]
+```
+
+`teams.part_of(p)` is the team of player `p` and `teams.size_of(t)` the number of players in team `t`, both counted from 0. A model with `active` on a variable declared `semi: true`, and otherwise linear, is solved exactly; one with `Quicopt.holds`, `Quicopt.min`, `Quicopt.max` or a partition is solved by a search, so its status is `"heuristic"`. When every variable of such a model is an integer or a binary variable, each needs finite bounds.
+
 ## The encoded model
 
 `solve` encodes the model for you, but the encoded form is not hidden. Inspect it,
