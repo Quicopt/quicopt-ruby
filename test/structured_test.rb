@@ -103,7 +103,7 @@ class StructuredTest < Minitest::Test
     m, = route_model
     assert_equal <<~TEXT.chomp, m.to_s
       min dist[route.item_at(0), route.item_at(1)] + dist[route.item_at(1), route.item_at(2)] + dist[route.item_at(2), route.item_at(3)] + dist[route.item_at(3), route.item_at(4)]
-        route orders items 0 to 4, 3 before 0
+        route is an ordering of items 0 to 4, with 3 before 0
         dist is a 5 × 5 lookup table
     TEXT
   end

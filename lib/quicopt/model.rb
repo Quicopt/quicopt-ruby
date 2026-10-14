@@ -614,10 +614,10 @@ module Quicopt
       @by_name[name.to_s]
     end
 
-    # Declare an order as a decision: +n+ items placed in +n+ slots, one item per
-    # slot, both numbered from 0. For a route the items are the stops and the
-    # slots are the visits, so slot 0 holds the first stop visited; for a machine
-    # the items are the jobs and the slots the positions in its queue.
+    # Declare an ordering as a decision: +n+ items placed in as many slots, one
+    # item per slot, both numbered from 0. For a route the items are the stops
+    # and the slots are the visits, so slot 0 holds the first stop visited; for a
+    # machine the items are the jobs and the slots the positions in its queue.
     #
     # Five stops along a road; find the shortest route through all of them that
     # visits stop 3 before stop 0:
@@ -753,9 +753,9 @@ module Quicopt
 
     # Declare a table of data that can be indexed by decisions. A model sometimes
     # needs a number from a table at a position that is not known yet: the distance
-    # between the first and the second stop of a route whose order the service is
-    # still choosing, or the price of an option an integer variable picks. A Ruby
-    # array cannot be indexed this way; the table returned here can.
+    # between the first and the second stop of a route whose ordering the service
+    # is still choosing, or the price of an option an integer variable picks. A
+    # Ruby array cannot be indexed this way; the table returned here can.
     #
     #   price  = m.lookup_table("price", [3.0, 1.0, 4.0, 1.5])
     #   choice = m.int_var(0, 3, "choice")
@@ -864,8 +864,9 @@ module Quicopt
         lines << "  #{v.name} in #{v.domain} #{range}"
       end
       @permutations.each do |p|
-        order = p.precedences.map { |a, b| ", #{a} before #{b}" }.join
-        lines << "  #{p.name} orders items 0 to #{p.size - 1}#{order}"
+        rules = p.precedences.map { |a, b| "#{a} before #{b}" }
+        rules = rules.empty? ? "" : ", with #{rules.join(', ')}"
+        lines << "  #{p.name} is an ordering of items 0 to #{p.size - 1}#{rules}"
       end
       @partitions.each { |p| lines << "  #{p.name} puts items 0 to #{p.size - 1} in parts 0 to #{p.parts - 1}" }
       @tables.each { |t| lines << "  #{t.name} is a #{t.shape.join(' × ')} lookup table" }

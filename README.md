@@ -26,7 +26,7 @@ There is no solver on your machine. The service does the solving.
   variables, constraints, objective.
 - [`Quicopt::Permutation`](https://quicopt.github.io/quicopt-ruby/Quicopt/Permutation.html)
   and [`Quicopt::LookupTable`](https://quicopt.github.io/quicopt-ruby/Quicopt/LookupTable.html) —
-  orders as decisions, and data read along them.
+  orderings as decisions, and data read along them.
 - [`Quicopt::Client`](https://quicopt.github.io/quicopt-ruby/Quicopt/Client.html) —
   sending a model, API keys, long-running jobs, errors.
 - [`Quicopt::Result`](https://quicopt.github.io/quicopt-ruby/Quicopt/Result.html) —
@@ -243,9 +243,9 @@ Two consequences of that, both deliberate:
 
 Chained comparisons (`1 <= x <= 5`) are not a thing in Ruby. Add two rows.
 
-## Choosing an order
+## Choosing an ordering
 
-Some decisions are orders: the route a van drives through its stops, or the sequence in which a machine works through its jobs. Declare such an order with `permutation`, and read data along it with a lookup table. Here are five stops along a road; find the shortest route through all of them that visits stop 3 before stop 0:
+Some decisions are orderings: the route a van drives through its stops, or the sequence in which a machine works through its jobs. Declare such an ordering with `permutation`, and read data along it with a lookup table. Here are five stops along a road; find the shortest route through all of them that visits stop 3 before stop 0:
 
 ```ruby
 position = [0, 3, 1, 4, 2]                    # km along the road, stops 0 to 4
@@ -261,14 +261,14 @@ result.objective                              # 4.0
 result.structures["route"].item_at            # [3, 1, 4, 2, 0]: the stops in the order visited
 ```
 
-A permutation places `n` items in `n` slots, one item per slot, both counted from 0. Here the items are the stops and the slots are the visits, so slot 0 holds the first stop visited:
+A permutation places `n` items in as many slots, one item per slot, both counted from 0. Here the items are the stops and the slots are the visits, so slot 0 holds the first stop visited:
 
 - `route.item_at(k)` is the stop in slot `k`: `route.item_at(0)` is the first stop visited.
 - `route.slot_of(i)` is the slot of stop `i`: when it is visited.
 - `route.precede(a, b)` requires stop `a` to be visited before stop `b`. Every solution meets every such requirement.
-- `start:` gives the order the service's search starts from: `m.permutation("route", 5, start: [4, 3, 2, 1, 0])` starts with stop 0 in slot 4, stop 1 in slot 3, and so on.
+- `start:` gives the ordering the service's search starts from: `m.permutation("route", 5, start: [4, 3, 2, 1, 0])` starts with stop 0 in slot 4, stop 1 in slot 3, and so on.
 
-The result holds each permutation's order both ways round, again counted from 0: `item_at`, the item in each slot, and `slot_of`, the slot of each item. Orders are found by a search, which cannot prove that no better order exists, so a model with a permutation comes back with the status `"heuristic"`.
+The result holds each permutation's ordering both ways round, again counted from 0: `item_at`, the item in each slot, and `slot_of`, the slot of each item. Orderings are found by a search, which cannot prove that no better ordering exists, so a model with a permutation comes back with the status `"heuristic"`.
 
 A Ruby array cannot be indexed by a decision the service has not made yet, such as which stop comes first; a lookup table can. `dist[route.item_at(k), route.item_at(k + 1)]` is the length of the leg from the `k`-th stop to the next, whichever stops those turn out to be. A table is a vector, indexed `table[i]`, or a matrix, indexed `table[i, j]`. Indexed by whole numbers only, it gives the entry itself (`dist[0, 1]` is `3.0`). It can also be indexed by an integer variable, to read the entry the service picks:
 
@@ -315,7 +315,7 @@ result.solution.select { |_, units| units > 0 }.sort.to_h
 
 Warehouse 1 stays closed. Warehouse 0 sends its full 25 units to customer 0 and the minimum of 10 to customer 1; warehouse 2 covers the rest. `Quicopt.holds` takes `<=`, `>=`, `<`, `>`, `==` and `!=`, and `tol:` lets a comparison miss by that much and still count: `Quicopt.holds(spend >= 300, tol: 0.01)`. `Quicopt.min` and `Quicopt.max` give the smallest and the largest of several expressions.
 
-`m.partition` splits items into groups the way `permutation` orders them. Six players of strengths 7, 5, 4, 3, 2 and 1 form a team of four and a team of two, as evenly matched as possible:
+`m.partition` makes a split of items into groups a decision, the way `permutation` makes an ordering one. Six players of strengths 7, 5, 4, 3, 2 and 1 form a team of four and a team of two, as evenly matched as possible:
 
 ```ruby
 strength = [7, 5, 4, 3, 2, 1]                  # of players 0 to 5
