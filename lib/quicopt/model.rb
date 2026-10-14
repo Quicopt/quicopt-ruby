@@ -47,7 +47,7 @@ module Quicopt
       value == value.to_i ? value.to_i.to_s : value.to_s
     end
 
-    # One term, dropping a unit coefficient (+x+, +-x+, +3*x+).
+    # One term, dropping a unit coefficient (<tt>x</tt>, <tt>-x</tt>, <tt>3*x</tt>).
     def term(coefficient, factors)
       return factors if coefficient == 1.0
       return "-#{factors}" if coefficient == -1.0
@@ -63,7 +63,7 @@ module Quicopt
   # what lets +3 * x+ parse: Ruby hands the multiplication back to us rather than
   # failing in +Integer#*+.
   module Operators
-    # @return [Expression] +self + other+
+    # @return [Expression] <tt>self + other</tt>
     def +(other)
       to_expr.plus(Expression.cast(other))
     end
@@ -148,9 +148,10 @@ module Quicopt
     # Builds an *equality row*, not a boolean — +x == 5+ is a constraint.
     #
     # A non-numeric, non-expression operand falls back to identity, so an
-    # incidental comparison (+x == nil+, +x == "x"+) still answers +false+ instead
-    # of raising. Hash and Set membership are unaffected either way: they key off
-    # +hash+/+eql?+, which +Variable+ defines separately.
+    # incidental comparison (<tt>x == nil</tt>, <tt>x == "x"</tt>) still
+    # answers +false+ instead of raising. Hash and Set membership are unaffected
+    # either way: they key off <tt>hash</tt>/<tt>eql?</tt>, which +Variable+
+    # defines separately.
     #
     # @return [Constraint, Boolean]
     def ==(other)
@@ -171,7 +172,8 @@ module Quicopt
     end
 
     # Lets Ruby fold a numeric on the left into an expression, so +3 * x+ and
-    # +10 - x+ dispatch here instead of failing inside +Integer+/+Float+.
+    # +10 - x+ dispatch here instead of failing inside
+    # <tt>Integer</tt>/<tt>Float</tt>.
     #
     # @param other [Numeric]
     # @return [Array(Expression, Expression)]
@@ -272,11 +274,11 @@ module Quicopt
   end
 
   # A polynomial of degree ≤ 2 over a model's variables, always kept in collected
-  # form: +constant + Σ cᵢ·xᵢ + Σ qᵢⱼ·xᵢxⱼ+.
+  # form: <tt>constant + Σ cᵢ·xᵢ + Σ qᵢⱼ·xᵢxⱼ</tt>.
   #
-  # A value read from a permutation (+route.item_at(0)+) or a lookup table
-  # (+dist[i, j]+) counts as one factor, like a variable: +2 * dist[i, j]+ is
-  # linear, +x * dist[i, j]+ quadratic.
+  # A value read from a permutation (<tt>route.item_at(0)</tt>) or a lookup
+  # table (<tt>dist[i, j]</tt>) counts as one factor, like a variable:
+  # +2 * dist[i, j]+ is linear, +x * dist[i, j]+ quadratic.
   #
   # Instances are immutable — every operator returns a new expression — so an
   # expression can be shared, reused and stored without aliasing surprises.
@@ -335,7 +337,7 @@ module Quicopt
       degree.zero?
     end
 
-    # @return [Expression] +self + other+
+    # @return [Expression] <tt>self + other</tt>
     def plus(other)
       Expression.new(constant: @constant + other.constant,
                      linear: Expression.merge(@linear, other.linear),
@@ -401,7 +403,7 @@ module Quicopt
       seen
     end
 
-    # Renders the polynomial, e.g. +3*x + 2*y - 4+.
+    # Renders the polynomial, e.g. <tt>-4 + 3\*x + 2\*y</tt>.
     def to_s
       terms = []
       terms << Format.number(@constant) unless @constant.zero?
@@ -614,10 +616,10 @@ module Quicopt
       @by_name[name.to_s]
     end
 
-    # Declare an order as a decision: +n+ items placed in +n+ slots, one item per
-    # slot, both numbered from 0. For a route the items are the stops and the
-    # slots are the visits, so slot 0 holds the first stop visited; for a machine
-    # the items are the jobs and the slots the positions in its queue.
+    # Declare an ordering as a decision: +n+ items placed in as many slots, one
+    # item per slot, both numbered from 0. For a route the items are the stops
+    # and the slots are the visits, so slot 0 holds the first stop visited; for a
+    # machine the items are the jobs and the slots the positions in its queue.
     #
     # Five stops along a road; find the shortest route through all of them that
     # visits stop 3 before stop 0:
@@ -753,9 +755,9 @@ module Quicopt
 
     # Declare a table of data that can be indexed by decisions. A model sometimes
     # needs a number from a table at a position that is not known yet: the distance
-    # between the first and the second stop of a route whose order the service is
-    # still choosing, or the price of an option an integer variable picks. A Ruby
-    # array cannot be indexed this way; the table returned here can.
+    # between the first and the second stop of a route whose ordering the service
+    # is still choosing, or the price of an option an integer variable picks. A
+    # Ruby array cannot be indexed this way; the table returned here can.
     #
     #   price  = m.lookup_table("price", [3.0, 1.0, 4.0, 1.5])
     #   choice = m.int_var(0, 3, "choice")
@@ -771,8 +773,8 @@ module Quicopt
     # @param name [String, Symbol] the table's name; shares one namespace with the
     #   model's variables and permutations
     # @param values [Array<Numeric>, Array<Array<Numeric>>] a vector (indexed
-    #   +table[i]+) or a matrix (+table[i, j]+, every row the same length) of
-    #   numbers, none of them NaN
+    #   +table[i]+) or a matrix (<tt>table[i, j]</tt>, every row the same
+    #   length) of numbers, none of them NaN
     # @return [LookupTable]
     # @raise [TypeError] if +values+ is neither a vector nor a matrix of numbers
     # @raise [ArgumentError] if it is empty, ragged or holds NaN, or the name is
@@ -864,8 +866,9 @@ module Quicopt
         lines << "  #{v.name} in #{v.domain} #{range}"
       end
       @permutations.each do |p|
-        order = p.precedences.map { |a, b| ", #{a} before #{b}" }.join
-        lines << "  #{p.name} orders items 0 to #{p.size - 1}#{order}"
+        rules = p.precedences.map { |a, b| "#{a} before #{b}" }
+        rules = rules.empty? ? "" : ", with #{rules.join(', ')}"
+        lines << "  #{p.name} is an ordering of items 0 to #{p.size - 1}#{rules}"
       end
       @partitions.each { |p| lines << "  #{p.name} puts items 0 to #{p.size - 1} in parts 0 to #{p.parts - 1}" }
       @tables.each { |t| lines << "  #{t.name} is a #{t.shape.join(' × ')} lookup table" }

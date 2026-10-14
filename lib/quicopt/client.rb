@@ -124,8 +124,9 @@ module Quicopt
       self
     end
 
-    # The kind of model the service recognised (+LP+/+MILP+/+QUBO+/…), or +nil+
-    # if it did not report one.
+    # The kind of model the service recognised
+    # (<tt>LP</tt>/<tt>MILP</tt>/<tt>QUBO</tt>/…), or +nil+ if it did not report
+    # one.
     #
     # @return [String, nil]
     def model_class
@@ -135,7 +136,7 @@ module Quicopt
 
   # A non-2xx service response.
   #
-  # +reason+ is the service's stable snake_case code (+size_exceeded+,
+  # +reason+ is the service's stable snake_case code (<tt>size_exceeded</tt>,
   # +unsupported_model+, +quota_exhausted+, +not_done+, +too_many_inflight+,
   # +queue_full+, +parse_error+, …) — match on it, not on the message. +display+
   # is the framed text to print; +status_code+ the HTTP status.
@@ -165,7 +166,7 @@ module Quicopt
   KEY_PATH_ENV = "QUICOPT_KEY_PATH"
 
   # A connection to a Quicopt service at +base_url+ — the public free tier
-  # (+DEFAULT_BASE_URL+) unless another URL is given.
+  # (<tt>DEFAULT_BASE_URL</tt>) unless another URL is given.
   #
   # The client holds the API key: pass a known one, or let the first keyless call
   # mint one — which is then cached on disk and reused by later runs, so one
@@ -361,11 +362,12 @@ module Quicopt
 
     # Render a config mapping as a URL query-string suffix.
     #
-    # Escapes per RFC 3986, so a space becomes +%20+ and never +'+'+ — the form
-    # the service's query parser round-trips unambiguously, and the form the
-    # other clients send. Ruby's stock helpers (+URI.encode_www_form+,
-    # +CGI.escape+, +URI.encode_www_form_component+) all emit +'+'+ here, so none
-    # of them can be used.
+    # Escapes per RFC 3986, so a space becomes +%20+ and never <tt>'+'</tt> —
+    # the form the service's query parser round-trips unambiguously, and the
+    # form the other clients send. Ruby's stock helpers
+    # (<tt>URI.encode_www_form</tt>, +CGI.escape+,
+    # +URI.encode_www_form_component+) all emit <tt>'+'</tt> here, so none of
+    # them can be used.
     #
     # @param config [Hash, nil]
     # @return [String] +"?k=v&…"+ if +config+ is non-empty, else +""+
@@ -558,8 +560,9 @@ module Quicopt
 
     # Fetch the job's metadata and framed log tail.
     #
-    # @return [Hash] the job state (+queued+/+running+/+done+/+failed+) and its
-    #   log tail, as returned by the service
+    # @return [Hash] the job state
+    #   (<tt>queued</tt>/<tt>running</tt>/<tt>done</tt>/<tt>failed</tt>) and
+    #   its log tail, as returned by the service
     def status
       @client.request("GET", "/v1/jobs/#{@job_id}")
     end
@@ -573,7 +576,7 @@ module Quicopt
     # @param poll [Numeric] delay between polls, in seconds
     # @return [Result]
     # @raise [QuicoptError] if +wait+ is false and the job is not yet done, on any
-    #   non-+not_done+ error, or once +timeout+ elapses
+    #   non-<tt>not_done</tt> error, or once +timeout+ elapses
     def result(wait: true, timeout: nil, poll: 0.5)
       timeout ||= @time_limit.nil? ? 120.0 : [120.0, @time_limit + WAIT_MARGIN].max
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout

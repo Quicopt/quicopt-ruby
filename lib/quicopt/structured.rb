@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tim Bode, PGI-12, Forschungszentrum Jülich
 # frozen_string_literal: true
 
-# quicopt/structured — orders as decisions (+Permutation+), assignments to
+# quicopt/structured — orderings as decisions (+Permutation+), assignments to
 # groups as decisions (+Partition+) and data read at decided positions
 # (+LookupTable+).
 #
