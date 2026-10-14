@@ -929,9 +929,9 @@ module Quicopt
     end
 
     def auto_name
-      n = @variables.size + 1
-      n += 1 while @by_name.key?("x#{n}") || @structured.key?("x#{n}")
-      "x#{n}"
+      number = @variables.size + 1
+      number += 1 while @by_name.key?("x#{number}") || @structured.key?("x#{number}")
+      "x#{number}"
     end
 
     # +name+ as a String, checked to be free among the model's variables,
