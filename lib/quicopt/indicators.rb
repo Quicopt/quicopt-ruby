@@ -37,8 +37,8 @@ module Quicopt
     # @param comparison [Constraint] built with +<=+, +>=+, +<+, +>+, +==+ or
     #   +!=+ between expressions, such as +shipped >= 60+
     # @param tol [Numeric] how far a comparison may miss and still count as
-    #   holding: +a >= b+ holds from +a = b − tol+ on, +a > b+ from +a > b + tol+.
-    #   Non-negative.
+    #   holding: +a >= b+ holds from +a = b − tol+ on, +a > b+ from
+    #   <tt>a > b + tol</tt>. Non-negative.
     # @return [Expression] a 0/1 expression; a number when the comparison
     #   involves no decision
     # @raise [TypeError] if +comparison+ is not a comparison — often one Ruby
@@ -55,8 +55,8 @@ module Quicopt
     end
 
     # The smallest of the given expressions, as an expression the service
-    # evaluates. +fee * Quicopt.min(1, a.active + b.active)+ is a fee that is due
-    # once, however many of +a+ and +b+ are in use.
+    # evaluates. <tt>fee * Quicopt.min(1, a.active + b.active)</tt> is a fee
+    # that is due once, however many of +a+ and +b+ are in use.
     #
     # @param args [Array<Expression, Variable, Numeric>] at least two
     # @return [Expression] a number when every argument is one
@@ -101,7 +101,7 @@ module Quicopt
       end
     end
 
-    # Whether a comparison between two numbers (+value = lhs − rhs+) holds.
+    # Whether a comparison between two numbers (<tt>value = lhs − rhs</tt>) holds.
     def truth(value, sense, tol)
       case sense
       when :le then -value + tol >= 0
@@ -172,8 +172,8 @@ module Quicopt
       @argument.variables
     end
 
-    # @return [String] the term as sent, e.g. +step(x + y - 1)+; the indicator of
-    #   a bare variable reads +x.active+
+    # @return [String] the term as sent, e.g. <tt>step(x + y - 1)</tt>; the
+    #   indicator of a bare variable reads +x.active+
     def to_s
       bare = @argument.constant.zero? && @argument.quadratic.empty? && @argument.linear.size == 1 &&
              @argument.linear.first[0].is_a?(Variable) && @argument.linear.first[1] == 1.0
@@ -227,7 +227,8 @@ module Quicopt
       @args.flat_map(&:variables).uniq
     end
 
-    # @return [String] the term as written, e.g. +min(1, a.active + b.active)+
+    # @return [String] the term as written, e.g.
+    #   <tt>min(1, a.active + b.active)</tt>
     def to_s
       "#{@op}(#{@args.join(', ')})"
     end

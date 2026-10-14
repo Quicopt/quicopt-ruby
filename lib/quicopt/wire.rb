@@ -96,9 +96,10 @@ module Quicopt
       #
       # IEEE keeps +-0.0+ distinct from +0.0+ — a distinct bit pattern, and a
       # distinct protobuf value — and moving a bound across an inequality
-      # (+f ≤ 0+ ⇒ +0 − f ≥ 0+) produces one whenever that bound is zero. The
-      # Python and Julia clients send +0.0+ there, so collapse the sign here
-      # rather than sending bytes that differ from theirs by a sign bit.
+      # (<tt>f ≤ 0</tt> ⇒ <tt>0 − f ≥ 0</tt>) produces one whenever that bound
+      # is zero. The Python and Julia clients send +0.0+ there, so collapse the
+      # sign here rather than sending bytes that differ from theirs by a sign
+      # bit.
       def number(value)
         float = value.to_f
         float.zero? ? 0.0 : float
