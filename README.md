@@ -261,7 +261,7 @@ result.objective                              # 4.0
 result.structures["route"].item_at            # [3, 1, 4, 2, 0]: the stops in the order visited
 ```
 
-A permutation places `n` items in as many slots, one item per slot, both counted from 0. Here the items are the stops and the slots are the visits, so slot 0 holds the first stop visited:
+A permutation places items in as many slots, one item per slot, both counted from 0. Here the items are the stops and the slots are the visits, so slot 0 holds the first stop visited:
 
 - `route.item_at(k)` is the stop in slot `k`: `route.item_at(0)` is the first stop visited.
 - `route.slot_of(i)` is the slot of stop `i`: when it is visited.

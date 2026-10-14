@@ -44,9 +44,9 @@ module Quicopt
     end
   end
 
-  # A permutation declared by +Model#permutation+: +size+ items placed in +size+
-  # slots, one item per slot, both numbered from 0. Read it with +item_at+ and
-  # +slot_of+; constrain it with +precede+.
+  # A permutation declared by +Model#permutation+: +n_items+ items placed in as
+  # many slots, one item per slot, both numbered from 0. Read it with +item_at+
+  # and +slot_of+; constrain it with +precede+.
   #
   #   route = m.permutation("route", 5)
   #   route.item_at(0)     # the first stop visited
@@ -58,7 +58,7 @@ module Quicopt
     # @return [String] the permutation's name; its arrangement comes back keyed by it
     attr_reader :name
     # @return [Integer] the number of items, which is also the number of slots
-    attr_reader :size
+    attr_reader :n_items
     # @return [Array<Integer>, nil] the slot each item starts in, or +nil+ for the
     #   default (item +i+ in slot +i+)
     attr_reader :start
@@ -66,10 +66,10 @@ module Quicopt
     # Declared with +Model#permutation+, not built directly.
     #
     # @api private
-    def initialize(model, name, size, start)
+    def initialize(model, name, n_items, start)
       @model = model
       @name = name
-      @size = size
+      @n_items = n_items
       @start = start&.freeze
       @precedences = []
       @reads = {}
@@ -79,22 +79,22 @@ module Quicopt
     # a route whose items are stops, +route.item_at(0)+ is the first stop visited.
     # Index a +LookupTable+ with it to read data about that item.
     #
-    # @param slot [Integer] from 0 to +size - 1+
+    # @param slot [Integer] from 0 to +n_items - 1+
     # @return [Expression]
     # @raise [TypeError, ArgumentError] if +slot+ is not one of the slots
     def item_at(slot)
-      read(:item_at, Positions.check(slot, @size, "slot", owner))
+      read(:item_at, Positions.check(slot, @n_items, "slot", owner))
     end
 
     # The slot item +item+ is placed in, an expression whose value the service
     # chooses. For a route whose items are stops, +route.slot_of(3)+ is when stop 3
     # is visited.
     #
-    # @param item [Integer] from 0 to +size - 1+
+    # @param item [Integer] from 0 to +n_items - 1+
     # @return [Expression]
     # @raise [TypeError, ArgumentError] if +item+ is not one of the items
     def slot_of(item)
-      read(:slot_of, Positions.check(item, @size, "item", owner))
+      read(:slot_of, Positions.check(item, @n_items, "item", owner))
     end
 
     # Require item +before+ to be in an earlier slot than item +after+: a pickup
@@ -109,13 +109,13 @@ module Quicopt
     #   contradicts those already given (1 before 2 and 2 before 1), or if the
     #   +start+ places +before+ after +after+
     def precede(before, after)
-      a = Positions.check(before, @size, "item", owner)
-      b = Positions.check(after, @size, "item", owner)
+      a = Positions.check(before, @n_items, "item", owner)
+      b = Positions.check(after, @n_items, "item", owner)
       raise ArgumentError, "an item cannot precede itself" if a == b
       if @start && @start[a] > @start[b]
         raise ArgumentError, "#{owner}: the start places item #{a} after item #{b}, which it must precede"
       end
-      if Permutation.cycle?(@precedences + [[a, b]], @size)
+      if Permutation.cycle?(@precedences + [[a, b]], @n_items)
         raise ArgumentError, "requiring #{a} before #{b} contradicts the requirements already given for #{owner}"
       end
 
@@ -129,20 +129,20 @@ module Quicopt
       @precedences.dup.freeze
     end
 
-    # @return [String] name and size
+    # @return [String] name and number of items
     def inspect
-      "#<Quicopt::Permutation #{@name} (#{@size} items in #{@size} slots)>"
+      "#<Quicopt::Permutation #{@name} (#{@n_items} items in #{@n_items} slots)>"
     end
 
-    # Whether the +[before, after]+ requirements over items +0...n+ contradict
-    # each other: Kahn's algorithm leaves an item unplaced exactly when they
-    # contain a cycle.
+    # Whether the +[before, after]+ requirements over items +0...n_items+
+    # contradict each other: Kahn's algorithm leaves an item unplaced exactly
+    # when they contain a cycle.
     #
     # @api private
-    def self.cycle?(edges, n)
-      indegree = Array.new(n, 0)
+    def self.cycle?(edges, n_items)
+      indegree = Array.new(n_items, 0)
       edges.each { |_, b| indegree[b] += 1 }
-      ready = (0...n).select { |i| indegree[i].zero? }
+      ready = (0...n_items).select { |i| indegree[i].zero? }
       placed = 0
       until ready.empty?
         x = ready.pop
@@ -154,7 +154,7 @@ module Quicopt
           ready << b if indegree[b].zero?
         end
       end
-      placed < n
+      placed < n_items
     end
 
     private
@@ -169,8 +169,8 @@ module Quicopt
     end
   end
 
-  # A partition declared by +Model#partition+: +size+ items in +parts+ parts,
-  # both numbered from 0. Read it with +part_of+ and +size_of+.
+  # A partition declared by +Model#partition+: +n_items+ items in +n_parts+
+  # parts, both numbered from 0. Read it with +part_of+ and +size_of+.
   #
   #   teams = m.partition("teams", 6, 2)
   #   teams.part_of(4)     # the team person 4 joins
@@ -181,21 +181,21 @@ module Quicopt
     # @return [String] the partition's name; its assignment comes back keyed by it
     attr_reader :name
     # @return [Integer] the number of items
-    attr_reader :size
+    attr_reader :n_items
     # @return [Integer] the number of parts
-    attr_reader :parts
+    attr_reader :n_parts
     # @return [Array<Integer>, nil] the part each item starts in, or +nil+ for the
-    #   default (item +i+ in part +i % parts+)
+    #   default (item +i+ in part +i % n_parts+)
     attr_reader :start
 
     # Declared with +Model#partition+, not built directly.
     #
     # @api private
-    def initialize(model, name, size, parts, start)
+    def initialize(model, name, n_items, n_parts, start)
       @model = model
       @name = name
-      @size = size
-      @parts = parts
+      @n_items = n_items
+      @n_parts = n_parts
       @start = start&.freeze
       @reads = {}
     end
@@ -203,26 +203,26 @@ module Quicopt
     # The part item +item+ is in, an expression whose value the service
     # chooses. Index a +LookupTable+ with it to read data about that part.
     #
-    # @param item [Integer] from 0 to +size - 1+
+    # @param item [Integer] from 0 to +n_items - 1+
     # @return [Expression]
     # @raise [TypeError, ArgumentError] if +item+ is not one of the items
     def part_of(item)
-      read(:part_of, Positions.check(item, @size, "item", owner))
+      read(:part_of, Positions.check(item, @n_items, "item", owner))
     end
 
     # The number of items in part +part+, an expression whose value the service
-    # chooses: a count from 0 to +size+.
+    # chooses: a count from 0 to +n_items+.
     #
-    # @param part [Integer] from 0 to +parts - 1+
+    # @param part [Integer] from 0 to +n_parts - 1+
     # @return [Expression]
     # @raise [TypeError, ArgumentError] if +part+ is not one of the parts
     def size_of(part)
-      read(:size_of, Positions.check(part, @parts, "part", owner))
+      read(:size_of, Positions.check(part, @n_parts, "part", owner))
     end
 
-    # @return [String] name and sizes
+    # @return [String] name, number of items and number of parts
     def inspect
-      "#<Quicopt::Partition #{@name} (#{@size} items in #{@parts} parts)>"
+      "#<Quicopt::Partition #{@name} (#{@n_items} items in #{@n_parts} parts)>"
     end
 
     private
@@ -252,7 +252,8 @@ module Quicopt
     attr_reader :name
     # @return [Array<Float>, Array<Array<Float>>] the entries, as given
     attr_reader :values
-    # @return [Array<Integer>] the extent of each dimension: +[n]+ or +[rows, columns]+
+    # @return [Array<Integer>] the extent of each dimension: +[length]+ or
+    #   +[rows, columns]+
     attr_reader :shape
 
     # Declared with +Model#lookup_table+, not built directly.
