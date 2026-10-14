@@ -136,6 +136,7 @@ class StructuredTest < Minitest::Test
     assert_raises(ArgumentError) { p.precede(1, 1) }
     p.precede(0, 1).precede(1, 2)
     assert_includes assert_raises(ArgumentError) { p.precede(2, 0) }.message, "contradicts"
+    assert_equal [3, "#<Quicopt::Permutation p (3 items in 3 slots)>"], [p.n_items, p.inspect]
   end
 
   def test_the_start_must_respect_the_precedences

@@ -616,10 +616,11 @@ module Quicopt
       @by_name[name.to_s]
     end
 
-    # Declare an ordering as a decision: +n+ items placed in as many slots, one
-    # item per slot, both numbered from 0. For a route the items are the stops
-    # and the slots are the visits, so slot 0 holds the first stop visited; for a
-    # machine the items are the jobs and the slots the positions in its queue.
+    # Declare an ordering as a decision: +n_items+ items placed in as many
+    # slots, one item per slot, both numbered from 0. For a route the items are
+    # the stops and the slots are the visits, so slot 0 holds the first stop
+    # visited; for a machine the items are the jobs and the slots the positions
+    # in its queue.
     #
     # Five stops along a road; find the shortest route through all of them that
     # visits stop 3 before stop 0:
@@ -641,31 +642,33 @@ module Quicopt
     # @param name [String, Symbol] identifies the permutation in the result, as
     #   +result.structures[name]+; shares one namespace with the model's variables
     #   and lookup tables
-    # @param n [Integer] the number of items, at least 2
+    # @param n_items [Integer] the number of items, at least 2
     # @param start [Array<Integer>, nil] the arrangement the service's search
     #   starts from: +start[i]+ is the slot of item +i+, so it holds each of
-    #   +0...n+ once. Left out, item +i+ starts in slot +i+.
+    #   +0...n_items+ once. Left out, item +i+ starts in slot +i+.
     # @return [Permutation]
-    # @raise [TypeError] if +n+ is not an Integer
-    # @raise [ArgumentError] if +n+ is below 2, the name is taken, or +start+ is
-    #   not an arrangement of +0...n+
-    def permutation(name, n, start: nil)
-      raise TypeError, "a permutation's size is a whole number, got #{n.inspect}" unless n.is_a?(Integer)
-      raise ArgumentError, "a permutation has at least 2 items, got #{n}" if n < 2
+    # @raise [TypeError] if +n_items+ is not an Integer
+    # @raise [ArgumentError] if +n_items+ is below 2, the name is taken, or
+    #   +start+ is not an arrangement of +0...n_items+
+    def permutation(name, n_items, start: nil)
+      unless n_items.is_a?(Integer)
+        raise TypeError, "a permutation's number of items is a whole number, got #{n_items.inspect}"
+      end
+      raise ArgumentError, "a permutation has at least 2 items, got #{n_items}" if n_items < 2
 
       nm = claim(name)
-      unless start.nil? || (start.is_a?(Array) && start.all?(Integer) && start.sort == (0...n).to_a)
-        raise ArgumentError, "permutation #{nm.inspect}: start must hold each of 0 to #{n - 1} once " \
+      unless start.nil? || (start.is_a?(Array) && start.all?(Integer) && start.sort == (0...n_items).to_a)
+        raise ArgumentError, "permutation #{nm.inspect}: start must hold each of 0 to #{n_items - 1} once " \
                              "(start[i] is the slot item i starts in)"
       end
-      permutation = Permutation.new(self, nm, n, start&.dup)
+      permutation = Permutation.new(self, nm, n_items, start&.dup)
       @permutations << permutation
       @structured[nm] = permutation
     end
 
-    # Declare an assignment of +n+ items to +parts+ parts as a decision: which
-    # team each person joins, which truck each parcel rides in. Items and parts
-    # are both numbered from 0, and a part may stay empty.
+    # Declare an assignment of +n_items+ items to +n_parts+ parts as a decision:
+    # which team each person joins, which truck each parcel rides in. Items and
+    # parts are both numbered from 0, and a part may stay empty.
     #
     # Six players of strengths 7, 5, 4, 3, 2 and 1 form a team of four and a
     # team of two, as evenly matched as possible:
@@ -684,27 +687,32 @@ module Quicopt
     # @param name [String, Symbol] identifies the partition in the result, as
     #   +result.structures[name]+; shares one namespace with the model's
     #   variables, permutations and lookup tables
-    # @param n [Integer] the number of items, at least 1
-    # @param parts [Integer] the number of parts, at least 2
+    # @param n_items [Integer] the number of items, at least 1
+    # @param n_parts [Integer] the number of parts, at least 2
     # @param start [Array<Integer>, nil] the assignment the service's search
-    #   starts from: +start[i]+ is the part of item +i+, one of +0...parts+.
-    #   Left out, item +i+ starts in part +i % parts+.
+    #   starts from: +start[i]+ is the part of item +i+, one of +0...n_parts+.
+    #   Left out, item +i+ starts in part +i % n_parts+.
     # @return [Partition]
-    # @raise [TypeError] if +n+ or +parts+ is not an Integer
-    # @raise [ArgumentError] if +n+ is below 1, +parts+ below 2, the name is
-    #   taken, or +start+ does not give each item a part
-    def partition(name, n, parts, start: nil)
-      raise TypeError, "a partition's number of items is a whole number, got #{n.inspect}" unless n.is_a?(Integer)
-      raise TypeError, "a partition's number of parts is a whole number, got #{parts.inspect}" unless parts.is_a?(Integer)
-      raise ArgumentError, "a partition has at least 1 item, got #{n}" if n < 1
-      raise ArgumentError, "a partition has at least 2 parts, got #{parts}" if parts < 2
+    # @raise [TypeError] if +n_items+ or +n_parts+ is not an Integer
+    # @raise [ArgumentError] if +n_items+ is below 1, +n_parts+ below 2, the
+    #   name is taken, or +start+ does not give each item a part
+    def partition(name, n_items, n_parts, start: nil)
+      unless n_items.is_a?(Integer)
+        raise TypeError, "a partition's number of items is a whole number, got #{n_items.inspect}"
+      end
+      unless n_parts.is_a?(Integer)
+        raise TypeError, "a partition's number of parts is a whole number, got #{n_parts.inspect}"
+      end
+      raise ArgumentError, "a partition has at least 1 item, got #{n_items}" if n_items < 1
+      raise ArgumentError, "a partition has at least 2 parts, got #{n_parts}" if n_parts < 2
 
       nm = claim(name)
-      unless start.nil? || (start.is_a?(Array) && start.size == n && start.all? { |b| b.is_a?(Integer) && b >= 0 && b < parts })
-        raise ArgumentError, "partition #{nm.inspect}: start gives each of the #{n} items a part " \
-                             "from 0 to #{parts - 1}"
+      unless start.nil? || (start.is_a?(Array) && start.size == n_items &&
+                            start.all? { |b| b.is_a?(Integer) && b >= 0 && b < n_parts })
+        raise ArgumentError, "partition #{nm.inspect}: start gives each of the #{n_items} items a part " \
+                             "from 0 to #{n_parts - 1}"
       end
-      partition = Partition.new(self, nm, n, parts, start&.dup)
+      partition = Partition.new(self, nm, n_items, n_parts, start&.dup)
       @partitions << partition
       @structured[nm] = partition
     end
@@ -868,9 +876,9 @@ module Quicopt
       @permutations.each do |p|
         rules = p.precedences.map { |a, b| "#{a} before #{b}" }
         rules = rules.empty? ? "" : ", with #{rules.join(', ')}"
-        lines << "  #{p.name} is an ordering of items 0 to #{p.size - 1}#{rules}"
+        lines << "  #{p.name} is an ordering of items 0 to #{p.n_items - 1}#{rules}"
       end
-      @partitions.each { |p| lines << "  #{p.name} puts items 0 to #{p.size - 1} in parts 0 to #{p.parts - 1}" }
+      @partitions.each { |p| lines << "  #{p.name} puts items 0 to #{p.n_items - 1} in parts 0 to #{p.n_parts - 1}" }
       @tables.each { |t| lines << "  #{t.name} is a #{t.shape.join(' × ')} lookup table" }
       @blocks.each { |b| lines << "  #{b.name} is a block of #{b.variables.join(', ')}" }
       lines.join("\n")
@@ -921,9 +929,9 @@ module Quicopt
     end
 
     def auto_name
-      n = @variables.size + 1
-      n += 1 while @by_name.key?("x#{n}") || @structured.key?("x#{n}")
-      "x#{n}"
+      number = @variables.size + 1
+      number += 1 while @by_name.key?("x#{number}") || @structured.key?("x#{number}")
+      "x#{number}"
     end
 
     # +name+ as a String, checked to be free among the model's variables,

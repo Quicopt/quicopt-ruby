@@ -242,12 +242,12 @@ module Quicopt
       def structure_decl(structure)
         start = (structure.start || []).map { |k| k + 1 }
         if structure.is_a?(Partition)
-          return PB::StructureDecl.new(name: structure.name, kind: "partition", size: structure.size,
-                                       start: start, fixed: false, parts: structure.parts)
+          return PB::StructureDecl.new(name: structure.name, kind: "partition", size: structure.n_items,
+                                       start: start, fixed: false, parts: structure.n_parts)
         end
 
         PB::StructureDecl.new(
-          name: structure.name, kind: "permutation", size: structure.size, start: start, fixed: false,
+          name: structure.name, kind: "permutation", size: structure.n_items, start: start, fixed: false,
           precede: structure.precedences.map { |a, b| PB::Precedence.new(before: a + 1, after: b + 1) }
         )
       end

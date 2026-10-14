@@ -162,6 +162,7 @@ class IndicatorsTest < Minitest::Test
     assert_raises(ArgumentError) { p.part_of(3) }
     assert_raises(ArgumentError) { p.size_of(2) }
     assert_raises(TypeError) { p.part_of(1.0) }
+    assert_equal [3, 2, "#<Quicopt::Partition p (3 items in 2 parts)>"], [p.n_items, p.n_parts, p.inspect]
   end
 
   def test_the_message_round_trips
