@@ -382,7 +382,7 @@ baked into the model.
 
 **Large models.** `solve(model, gzip: true)` compresses the request body.
 
-**Time limit.** The service chooses how long a solve may run. `time_limit:` sets that time instead, in seconds. A solver that proves its answer sooner still stops sooner; a search, which cannot prove it is done, runs for all of it:
+**Time limit.** The service chooses how long a solve may run. `time_limit:` sets that time instead, in seconds. A solver that proves its answer sooner still stops sooner; a search, which cannot prove it is done, may stop sooner too, once it stops finding better answers:
 
 ```ruby
 result = client.solve(m, time_limit: 30)

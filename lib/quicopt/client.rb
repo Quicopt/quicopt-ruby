@@ -231,10 +231,11 @@ module Quicopt
     #   model.
     # @param time_limit [Numeric, nil] how many seconds the solve may run, in
     #   place of the time the service would choose. A solver that proves its
-    #   answer sooner stops sooner; a search, which cannot prove it is done, runs
-    #   for all of it. The service grants at most its maximum (120 s on the free
-    #   tier), and a warning says so when it granted less. The client waits for
-    #   the answer at least this long plus a minute.
+    #   answer sooner stops sooner; a search, which cannot prove it is done, may
+    #   stop sooner too, once it stops finding better answers. The service grants
+    #   at most its maximum (120 s on the free tier), and a warning says so when
+    #   it granted less. The client waits for the answer at least this long plus
+    #   a minute.
     # @param config [Hash, nil] optional service parameters, sent as the query
     #   string
     # @param gzip [Boolean] gzip-compress the request body
