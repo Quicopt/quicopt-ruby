@@ -27,10 +27,14 @@ class ClientTest < Minitest::Test
     @cache_dir = Dir.mktmpdir("quicopt-test-cache")
     @saved_key_path = ENV.fetch(Quicopt::KEY_PATH_ENV, nil)
     ENV[Quicopt::KEY_PATH_ENV] = File.join(@cache_dir, "quicopt", "free_key")
+    # A developer's own QUICOPT_API_KEY would make every client below hold that
+    # key, so each test runs as a caller without one.
+    @saved_api_key = ENV.delete(Quicopt::API_KEY_ENV)
   end
 
   def teardown
     ENV[Quicopt::KEY_PATH_ENV] = @saved_key_path
+    ENV[Quicopt::API_KEY_ENV] = @saved_api_key
     FileUtils.remove_entry(@cache_dir)
   end
 
@@ -211,6 +215,37 @@ class ClientTest < Minitest::Test
       Quicopt::Client.new(server.base_url, "mine").solve(@m)
       refute_predicate key_path, :exist?
     end
+  end
+
+  def test_the_key_can_be_passed_by_keyword
+    StubServer.run(->(_req) { json_ok(RESULT, "X-Quicopt-Api-Key" => "minted-key") }) do |server|
+      Quicopt::Client.new(server.base_url, api_key: "mine").solve(@m)
+      assert_equal "Bearer mine", server.requests.first.headers["authorization"]
+      refute_predicate key_path, :exist?
+    end
+  end
+
+  def test_a_key_in_the_environment_is_used_and_never_cached
+    # A key set in QUICOPT_API_KEY is the caller's own, like a passed one.
+    ENV[Quicopt::API_KEY_ENV] = " env-key\n"   # stray whitespace is stripped
+    StubServer.run(->(_req) { json_ok(RESULT, "X-Quicopt-Api-Key" => "minted-key") }) do |server|
+      client = Quicopt::Client.new(server.base_url)
+      client.solve(@m)
+      assert_equal "Bearer env-key", server.requests.first.headers["authorization"]
+      assert_equal "env-key", client.api_key
+      refute_predicate key_path, :exist?
+    end
+  end
+
+  def test_a_passed_key_beats_the_environment
+    ENV[Quicopt::API_KEY_ENV] = "env-key"
+    assert_equal "mine", Quicopt::Client.new(api_key: "mine").api_key
+    assert_equal "mine", Quicopt::Client.new(Quicopt::DEFAULT_BASE_URL, "mine").api_key
+  end
+
+  def test_a_blank_environment_variable_counts_as_unset
+    ENV[Quicopt::API_KEY_ENV] = "   "
+    assert_nil Quicopt::Client.new(cache: false).api_key
   end
 
   def test_caching_can_be_disabled
@@ -494,7 +529,7 @@ class ClientTest < Minitest::Test
 
   # ── construction ──────────────────────────────────────────────────────────
 
-  def test_the_default_base_url_is_the_public_free_tier
+  def test_the_default_base_url_is_the_quicopt_service
     assert_equal "https://quicoptapi.pgi.fz-juelich.de", Quicopt::DEFAULT_BASE_URL
     assert_equal Quicopt::DEFAULT_BASE_URL, Quicopt::Client.new.base_url
   end

@@ -22,7 +22,7 @@ require_relative "quicopt/client"
 #   m.maximize(3 * x + 2 * y + z)
 #   m.add(x + y <= 5)
 #
-#   result = Quicopt::Client.new.solve(m)
+#   result = Quicopt::Client.new(api_key: "…").solve(m)
 #   puts result.display
 #
 # Three pieces, nothing more: +Model+ authors, +Wire+ encodes, +Client+ ships.

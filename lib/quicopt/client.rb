@@ -15,11 +15,9 @@ require "zlib"
 # out over stdlib +net/http+, so the gem's only runtime dependency stays
 # +google-protobuf+. The request body is the encoded model; the response is the
 # service's result JSON (+status+ / +objective+ / +solution+ / a ready-to-print
-# +display+ / …). The first keyless call mints an API key, returned
-# in the +X-Quicopt-Api-Key+ response header; it is cached at
-# +$XDG_CACHE_HOME/quicopt/free_key+ and replayed as +Authorization: Bearer+ on
-# every later call — including from a later *process*, so one caller keeps one key
-# rather than minting a fresh one per run.
+# +display+ / …). Every request carries your API key as
+# <tt>Authorization: Bearer</tt>. Register at https://quicopt.com/signup to
+# receive one by email.
 #
 # Two entry points mirror the two service endpoints:
 #
@@ -35,9 +33,8 @@ require "zlib"
 # warns when it granted less, and waits on the socket (or polls) long enough for
 # the time it asked for.
 module Quicopt
-  # The public Quicopt free-tier endpoint a +Client+ targets when no +base_url+
-  # is given. Mirrors the Python and Julia clients' default, so every client
-  # reaches the same server out of the box.
+  # The Quicopt service a +Client+ targets when no +base_url+ is given. The
+  # Python, Julia and R clients default to the same address.
   DEFAULT_BASE_URL = "https://quicoptapi.pgi.fz-juelich.de"
 
   # The modelling library a model was written in, sent as the +source_language+
@@ -159,23 +156,27 @@ module Quicopt
     end
   end
 
-  # Environment variable overriding where the free key is cached. Point it at
-  # durable storage in an environment whose home directory does not survive the
-  # run (CI, containers), where the default location is wiped between sessions
-  # and every run would otherwise mint a fresh key.
+  # Environment variable a +Client+ reads its API key from when none is passed.
+  # It keeps the key out of your code.
+  API_KEY_ENV = "QUICOPT_API_KEY"
+
+  # Environment variable overriding where the client saves a key the server
+  # issued itself. A server that gives a caller without a key a new one on the
+  # first call has the client save that key and reuse it in later runs. Point the
+  # variable at durable storage where the home directory does not survive the
+  # run (CI, containers).
   KEY_PATH_ENV = "QUICOPT_KEY_PATH"
 
-  # A connection to a Quicopt service at +base_url+ — the public free tier
-  # (<tt>DEFAULT_BASE_URL</tt>) unless another URL is given.
+  # A connection to a Quicopt service at +base_url+, by default
+  # <tt>DEFAULT_BASE_URL</tt>.
   #
-  # The client holds the API key: pass a known one, or let the first keyless call
-  # mint one — which is then cached on disk and reused by later runs, so one
-  # caller keeps one key.
+  # The client holds your API key: the one passed as +api_key:+, else the one in
+  # the environment variable <tt>QUICOPT_API_KEY</tt>. Register at
+  # https://quicopt.com/signup to receive a key by email.
   #
-  #   client = Quicopt::Client.new
+  #   client = Quicopt::Client.new(api_key: "…")   # the key from your sign-up email
   #   result = client.solve(model)
   #   puts result.display
-  #   client.api_key   # => the key the first call minted (and cached)
   class Client
     # The HTTP methods this client issues, and the request class for each.
     REQUESTS = {
@@ -189,31 +190,38 @@ module Quicopt
 
     # @return [String] the service base URL, without a trailing slash
     attr_reader :base_url
-    # @return [String, nil] the API key in use; set on the first mint
+    # @return [String, nil] the API key in use
     attr_accessor :api_key
     # @return [Float] the per-request socket timeout, in seconds
     attr_accessor :timeout
-    # @return [Pathname] where the free key is cached
+    # @return [Pathname] where a key the server issued is saved
     attr_reader :key_path
 
     # Bind a client to a service endpoint.
     #
     # @param base_url [String] the service base URL; a trailing slash is stripped
-    # @param api_key [String, nil] a known API key, or +nil+ to reuse the cached
-    #   free key (minting one on the first keyless call). A key passed here is
-    #   used as-is and never written to the cache, so authenticating with a key
-    #   you already hold cannot clobber the free key of whoever runs the code.
+    # @param key [String, nil] your API key, given as the second argument; the
+    #   same as +api_key:+
+    # @param api_key [String, nil] your API key. When +nil+, the client reads the
+    #   key from the environment variable <tt>QUICOPT_API_KEY</tt>, and failing
+    #   that uses a key saved by an earlier run (see +key_path:+). A key passed
+    #   here or read from the environment is used as-is and never saved.
     # @param timeout [Numeric] the per-request socket timeout, in seconds
-    # @param key_path [String, Pathname, nil] where to cache the free key;
-    #   defaults to +Client.default_key_path+
-    # @param cache [Boolean] +false+ keeps the key in memory only, neither
-    #   reading nor writing the cache file
-    def initialize(base_url = DEFAULT_BASE_URL, api_key = nil, timeout: 60.0,
-                   key_path: nil, cache: true)
+    # @param key_path [String, Pathname, nil] where to save a key the server
+    #   issued itself, on a first call without a key; defaults to
+    #   +Client.default_key_path+
+    # @param cache [Boolean] +false+ keeps an issued key in memory only, neither
+    #   reading nor writing the file
+    def initialize(base_url = DEFAULT_BASE_URL, key = nil, api_key: key,
+                   timeout: 60.0, key_path: nil, cache: true)
       @base_url = base_url.to_s.sub(%r{/+\z}, "")
       @timeout = timeout
       @key_path = Pathname(key_path || Client.default_key_path).expand_path
       @cache = cache
+      api_key = Client.env_key if api_key.nil?
+      # A key the caller holds — passed, or set in the environment — is never
+      # written to the cache, so it cannot clobber the issued key of whoever runs
+      # the code, and is never discarded on a 401.
       @explicit = !api_key.nil?
       @api_key = @explicit ? api_key : (cache ? Client.read_key(@key_path) : nil)
       # Only a key that came off disk may be discarded and re-minted on a 401 —
@@ -414,6 +422,15 @@ module Quicopt
       parsed.is_a?(Hash) ? parsed : { "error" => text }
     rescue JSON::ParserError
       { "error" => text }
+    end
+
+    # The API key set in the environment variable +API_KEY_ENV+, stripped of
+    # surrounding whitespace; +nil+ when the variable is unset or blank.
+    #
+    # @return [String, nil]
+    def self.env_key
+      key = ENV.fetch(API_KEY_ENV, "").strip
+      key.empty? ? nil : key
     end
 
     # The default location of the cached free key:

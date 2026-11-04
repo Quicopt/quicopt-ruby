@@ -60,9 +60,11 @@ z = m.num_var(0, 10, "z")
 m.maximize(3 * x + 2 * y + z)
 m.add(x + y <= 5)
 
-result = Quicopt::Client.new.solve(m)
+result = Quicopt::Client.new(api_key: "…").solve(m)   # the key from your sign-up email
 puts result.display
 ```
+
+The service needs an API key. Register at https://quicopt.com/signup and the key arrives by email. Without a key, the call fails with a message that links to the sign-up page.
 
 `result.display` is rendered by the service and ready to print — the same summary
 for every kind of model. The structured fields are there too:
@@ -152,7 +154,7 @@ m.minimize(suppliers.sum { |s| cart_value[s] + ship_fee[s] * (use[s] - free[s]) 
 Now all we have to do is to send this to the Quicopt API service:
 ```ruby
 # get the results from the API service
-result = Quicopt::Client.new.solve(m)
+result = Quicopt::Client.new(api_key: "…").solve(m)
 
 # inspect the result
 puts result.display
@@ -256,7 +258,7 @@ route = m.permutation("route", 5)
 route.precede(3, 0)                           # stop 3 is visited before stop 0
 m.minimize((0...4).sum { |k| dist[route.item_at(k), route.item_at(k + 1)] })
 
-result = Quicopt::Client.new.solve(m)
+result = Quicopt::Client.new(api_key: "…").solve(m)
 result.objective                              # 4.0
 result.structures["route"].item_at            # [3, 1, 4, 2, 0]: the stops in the order visited
 ```
@@ -278,7 +280,7 @@ price  = m.lookup_table("price", [3.0, 1.0, 4.0, 1.5])
 choice = m.int_var(0, 3, "choice")
 m.minimize(price[choice])
 
-result = Quicopt::Client.new.solve(m)
+result = Quicopt::Client.new(api_key: "…").solve(m)
 result.solution                               # {"choice" => 1.0}: option 1 is the cheapest
 result.objective                              # 1.0
 ```
@@ -307,7 +309,7 @@ m.minimize(
   (0...3).sum { |w| opening[w] * Quicopt.holds(ship[w].sum >= 1) }                          # opening fee
 )
 
-result = Quicopt::Client.new.solve(m)
+result = Quicopt::Client.new(api_key: "…").solve(m)
 result.objective                               # 300.0
 result.solution.select { |_, units| units > 0 }.sort.to_h
 # {"ship_0_0" => 25.0, "ship_0_1" => 10.0, "ship_2_0" => 15.0, "ship_2_1" => 20.0, "ship_2_2" => 20.0}
@@ -325,7 +327,7 @@ total = (0...2).map { |t| (0...6).sum { |p| strength[p] * Quicopt.holds(teams.pa
 m.add(teams.size_of(0) == 4)                   # team 0 has four players
 m.minimize(Quicopt.max(total[0], total[1]))
 
-result = Quicopt::Client.new.solve(m)
+result = Quicopt::Client.new(api_key: "…").solve(m)
 result.objective                               # 11.0
 result.structures["teams"].part_of             # [1, 0, 1, 0, 0, 0]: players 0 and 2 form team 1
 result.structures["teams"].size_of             # [4, 2]
@@ -343,7 +345,7 @@ bytes   = m.encode          # the message itself: protobuf bytes, ready to POST
 program = m.to_program      # the same content as a structured object you can read
 Quicopt.decode(bytes)       # bytes back into that object
 
-Quicopt::Client.new.solve(bytes)   # solve an already-encoded model
+Quicopt::Client.new(api_key: "…").solve(bytes)   # solve an already-encoded model
 ```
 
 The message format is a [protobuf](https://protobuf.dev) schema,
@@ -359,22 +361,12 @@ Compare decoded models, never the raw bytes.
 ## The client
 
 ```ruby
-client = Quicopt::Client.new                       # the public free tier
-client = Quicopt::Client.new("http://localhost:8137")
-client = Quicopt::Client.new(url, "my-api-key", timeout: 120)
+client = Quicopt::Client.new(api_key: "…")   # the Quicopt service
+client = Quicopt::Client.new("http://localhost:8137", api_key: "…")
+client = Quicopt::Client.new(api_key: "…", timeout: 120)
 ```
 
-**Keys.** The first call without a key mints one, cached at
-`$XDG_CACHE_HOME/quicopt/free_key` (`~/.cache/…` by default) and replayed as a
-bearer token on every later call — including from later runs, so you keep one key
-without doing anything. A key you passed in is used as-is, never cached and never
-overwritten; `Quicopt::Client.new(url, cache: false)` keeps the minted key in
-memory only.
-
-Where the home directory does not survive the run (CI, containers), the cache is
-wiped between sessions and each run mints a new key. Set `QUICOPT_KEY_PATH` to a
-durable location — or `Client.new(url, key_path: …)` — to keep one key across
-sessions.
+**Keys.** Register at https://quicopt.com/signup and the key arrives by email. Pass it as `api_key:`. To keep the key out of your code, set the environment variable `QUICOPT_API_KEY` instead and create the client as `Quicopt::Client.new`.
 
 **Per-project tagging.** `solve(model, project: "atlas")` tags the call so usage on
 one key can be attributed per project. It rides the query string and is never

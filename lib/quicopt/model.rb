@@ -632,7 +632,7 @@ module Quicopt
     #   route.precede(3, 0)                         # stop 3 is visited before stop 0
     #   m.minimize((0...4).sum { |k| dist[route.item_at(k), route.item_at(k + 1)] })
     #
-    #   result = Quicopt::Client.new.solve(m)
+    #   result = Quicopt::Client.new(api_key: "…").solve(m)
     #   result.objective                            # 4.0
     #   result.structures["route"].item_at          # [3, 1, 4, 2, 0]: the stops in the order visited
     #
@@ -680,7 +680,7 @@ module Quicopt
     #   m.add(teams.size_of(0) == 4)                   # team 0 has four players
     #   m.minimize(Quicopt.max(total[0], total[1]))
     #
-    #   result = Quicopt::Client.new.solve(m)
+    #   result = Quicopt::Client.new(api_key: "…").solve(m)
     #   result.objective                               # 11.0
     #   result.structures["teams"].part_of             # [1, 0, 1, 0, 0, 0]: players 0 and 2 form team 1
     #
