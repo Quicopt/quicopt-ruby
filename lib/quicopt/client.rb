@@ -38,7 +38,7 @@ module Quicopt
   # The public Quicopt free-tier endpoint a +Client+ targets when no +base_url+
   # is given. Mirrors the Python and Julia clients' default, so every client
   # reaches the same server out of the box.
-  DEFAULT_BASE_URL = "https://try.quicoptapi.pgi.fz-juelich.de"
+  DEFAULT_BASE_URL = "https://quicoptapi.pgi.fz-juelich.de"
 
   # The modelling library a model was written in, sent as the +source_language+
   # call tag. It names the *library*, not the programming language — the service

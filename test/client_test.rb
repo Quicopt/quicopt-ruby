@@ -495,7 +495,7 @@ class ClientTest < Minitest::Test
   # ── construction ──────────────────────────────────────────────────────────
 
   def test_the_default_base_url_is_the_public_free_tier
-    assert_equal "https://try.quicoptapi.pgi.fz-juelich.de", Quicopt::DEFAULT_BASE_URL
+    assert_equal "https://quicoptapi.pgi.fz-juelich.de", Quicopt::DEFAULT_BASE_URL
     assert_equal Quicopt::DEFAULT_BASE_URL, Quicopt::Client.new.base_url
   end
 
