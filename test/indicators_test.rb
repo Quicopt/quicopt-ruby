@@ -134,6 +134,28 @@ class IndicatorsTest < Minitest::Test
     assert_raises(TypeError) { @m.block("b", [3]) }
   end
 
+  def test_block_refusals_name_the_variable_and_the_other_block
+    @m.block("a", [@x])
+    twice = assert_raises(ArgumentError) { @m.block("b", [@y, @y]) }
+    assert_equal 'variable "y" is listed twice in block "b"', twice.message
+    taken = assert_raises(ArgumentError) { @m.block("b", [@y, @x]) }
+    assert_equal 'variable "x" is already in block "a"', taken.message
+  end
+
+  def test_a_refused_block_claims_none_of_its_variables
+    @m.block("a", [@x])
+    assert_raises(ArgumentError) { @m.block("b", [@y, @x]) }        # x is in a
+    assert_equal %w[y], @m.block("c", [@y]).variables.map(&:name)   # y is still free
+    assert_equal %w[a c], @m.blocks.map(&:name)
+  end
+
+  def test_many_blocks_of_many_variables
+    vars = Array.new(20_000) { |k| @m.int_var(0, 3, "v#{k}") }
+    vars.each_slice(400).with_index { |slice, k| @m.block("part#{k}", slice) }
+    assert_equal 50, @m.blocks.size
+    assert_raises(ArgumentError) { @m.block("again", [vars.last]) }
+  end
+
   # ── partitions ────────────────────────────────────────────────────────────
 
   def test_a_partition_counts_from_one_on_the_wire_except_a_size
