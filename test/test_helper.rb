@@ -15,15 +15,24 @@ require "socket"
 # stubbing +Net::HTTP+ and asserting against a mock of our own assumptions.
 #
 # The handler block receives a +Request+ and returns +[status, headers, body]+.
+#
+# +keep_alive+ sets what happens to a connection after a response: +false+ says
+# +Connection: close+ and closes it, +true+ keeps it for the client's next
+# request, and +:drop+ closes it without saying so, as a server does whose idle
+# timeout ran out.
 class StubServer
   Request = Struct.new(:method, :path, :query, :headers, :body)
 
   # @return [Array<Request>] every request received, in order
   attr_reader :requests
+  # @return [Integer] the connections accepted so far
+  attr_reader :connections
 
-  def initialize(&handler)
+  def initialize(keep_alive: false, &handler)
     @handler = handler
+    @keep_alive = keep_alive
     @requests = []
+    @connections = 0
     @socket = TCPServer.new("127.0.0.1", 0)
     @thread = Thread.new { serve }
   end
@@ -38,8 +47,8 @@ class StubServer
   end
 
   # Run a server with +handler+ for the duration of the block, then shut it down.
-  def self.run(handler)
-    server = new(&handler)
+  def self.run(handler, keep_alive: false)
+    server = new(keep_alive: keep_alive, &handler)
     yield server
   ensure
     server&.stop
@@ -49,19 +58,27 @@ class StubServer
 
   def serve
     loop do
-      handle(@socket.accept)
+      connection = @socket.accept
+      @connections += 1
+      # a kept connection waits for its next request, so each gets a thread
+      @keep_alive == true ? Thread.new(connection) { |c| handle(c) } : handle(connection)
     rescue IOError, Errno::EBADF
       break
     end
   end
 
   def handle(connection)
-    request = read_request(connection)
-    return if request.nil?
+    loop do
+      request = read_request(connection)
+      break if request.nil?
 
-    @requests << request
-    status, headers, body = @handler.call(request)
-    write_response(connection, status, headers || {}, body.to_s)
+      @requests << request
+      status, headers, body = @handler.call(request)
+      write_response(connection, status, headers || {}, body.to_s)
+      break unless @keep_alive == true
+    end
+  rescue Errno::EPIPE, Errno::ECONNRESET
+    nil # the client gave up on this connection
   ensure
     begin
       connection.close
@@ -89,7 +106,8 @@ class StubServer
     connection.write("HTTP/1.1 #{status} Status\r\n")
     headers.each { |key, value| connection.write("#{key}: #{value}\r\n") }
     connection.write("Content-Length: #{body.bytesize}\r\n")
-    connection.write("Connection: close\r\n\r\n")
+    connection.write("Connection: close\r\n") unless @keep_alive
+    connection.write("\r\n")
     connection.write(body)
   end
 end
