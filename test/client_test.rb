@@ -527,6 +527,107 @@ class ClientTest < Minitest::Test
     end
   end
 
+  # ── connections ───────────────────────────────────────────────────────────
+
+  # A job's whole life: submit, status, result, delete.
+  def job_handler
+    lambda do |req|
+      next json_ok({ "job_id" => "job-7" }) if req.method == "POST"
+      next [204, {}, ""] if req.method == "DELETE"
+      next json_ok(RESULT) if req.path.end_with?("/result")
+
+      json_ok({ "status" => "done" })
+    end
+  end
+
+  # Submit a job, read its status and result, and delete it.
+  def run_a_job(client)
+    job = client.submit(@m)
+    assert_equal "done", job.status["status"]
+    assert_in_delta 17.0, job.result.objective
+    job.delete
+  end
+
+  def test_a_run_of_requests_shares_one_connection
+    StubServer.run(job_handler, keep_alive: true) do |server|
+      client = Quicopt::Client.new(server.base_url)
+      run_a_job(client)
+      client.solve(@m)
+      client.close
+      assert_equal 5, server.requests.size
+      assert_equal 1, server.connections
+    end
+  end
+
+  def test_a_server_that_closes_each_connection_gets_a_new_one
+    StubServer.run(job_handler) do |server|
+      run_a_job(Quicopt::Client.new(server.base_url))
+      assert_equal 4, server.connections
+    end
+  end
+
+  def test_a_connection_the_server_dropped_is_replaced_before_a_submit
+    StubServer.run(job_handler, keep_alive: :drop) do |server|
+      client = Quicopt::Client.new(server.base_url)
+      client.submit(@m)
+      sleep 0.05 # the close reaches the client
+      client.submit(@m)
+      assert_equal 2, server.connections
+    end
+  end
+
+  def test_threads_sharing_a_client_never_share_a_connection
+    slow = lambda do |_req|
+      sleep 0.2
+      json_ok
+    end
+    StubServer.run(slow, keep_alive: true) do |server|
+      client = Quicopt::Client.new(server.base_url)
+      results = Array.new(4) { Thread.new { client.solve(@m) } }.map(&:value)
+      assert_equal [17.0] * 4, results.map(&:objective)
+      assert_equal 4, server.connections
+      client.solve(@m) # one of the four, now idle
+      assert_equal 4, server.connections
+      client.close
+    end
+  end
+
+  def test_a_request_that_times_out_does_not_keep_its_connection
+    calls = 0
+    first_slow = lambda do |_req|
+      calls += 1
+      sleep 0.5 if calls == 1
+      json_ok
+    end
+    StubServer.run(first_slow, keep_alive: true) do |server|
+      client = Quicopt::Client.new(server.base_url, timeout: 0.2)
+      assert_raises(Net::ReadTimeout) { client.solve(@m) }
+      assert_in_delta 17.0, client.solve(@m).objective
+      assert_equal 2, server.connections
+      client.close
+    end
+  end
+
+  def test_a_forked_process_opens_its_own_connection
+    skip "no fork here" unless Process.respond_to?(:fork)
+    StubServer.run(->(_req) { json_ok }, keep_alive: true) do |server|
+      client = Quicopt::Client.new(server.base_url)
+      client.solve(@m)
+      pid = fork do
+        client.solve(@m)
+        client.close
+        exit!(0)
+      rescue StandardError
+        exit!(1)
+      end
+      Process.wait(pid)
+      assert_predicate $?, :success?
+      assert_in_delta 17.0, client.solve(@m).objective # the parent's connection, untouched
+      client.close
+      assert_equal 2, server.connections
+    end
+  end
+
   # ── construction ──────────────────────────────────────────────────────────
 
   def test_the_default_base_url_is_the_quicopt_service

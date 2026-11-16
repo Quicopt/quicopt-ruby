@@ -17,7 +17,9 @@ require "zlib"
 # service's result JSON (+status+ / +objective+ / +solution+ / a ready-to-print
 # +display+ / …). Every request carries your API key as
 # <tt>Authorization: Bearer</tt>. Register at https://quicopt.com/signup to
-# receive one by email.
+# receive one by email. A client keeps its connection open between requests, so
+# only the first one waits for the connection to be set up; +Client#close+
+# closes it.
 #
 # Two entry points mirror the two service endpoints:
 #
@@ -188,6 +190,12 @@ module Quicopt
     # The content type of a request body: an encoded model is opaque binary.
     OCTET_STREAM = "application/octet-stream"
 
+    # Seconds an open connection may sit unused and still carry the next
+    # request. Servers and proxies close idle connections after their own
+    # timeout, commonly a minute or more; one closed sooner is noticed before
+    # the next request and replaced.
+    KEEP_ALIVE = 30.0
+
     # @return [String] the service base URL, without a trailing slash
     attr_reader :base_url
     # @return [String, nil] the API key in use
@@ -227,6 +235,11 @@ module Quicopt
       # Only a key that came off disk may be discarded and re-minted on a 401 —
       # see +request_raw+, which relies on this to bound re-minting to one per run.
       @from_cache = !@api_key.nil? && !@explicit
+      # Open connections between requests, each used by one request at a time
+      # (see +connected+), and the process they belong to (see +idle+).
+      @idle = []
+      @idle_pid = Process.pid
+      @idle_lock = Mutex.new
     end
 
     # Solve +model+ synchronously, blocking until the result returns.
@@ -352,7 +365,7 @@ module Quicopt
       end
       req["Authorization"] = "Bearer #{@api_key}" if @api_key
 
-      resp = http(uri, timeout || @timeout).start { |conn| conn.request(req) }
+      resp = connected(uri, timeout || @timeout) { |conn| conn.request(req) }
       capture_key(resp) # a 502/504 on a first call still minted a key
       raise QuicoptError.new(resp.code.to_i, Client.decode(resp.body)) unless resp.is_a?(Net::HTTPSuccess)
 
@@ -477,15 +490,63 @@ module Quicopt
       tmp&.unlink if tmp&.exist?
     end
 
+    # Close the connections the client keeps open between requests. The client
+    # stays usable: its next request opens a new one.
+    #
+    # @return [nil]
+    def close
+      @idle_lock.synchronize { idle.slice!(0..) }.each { |conn| conn.finish if conn.started? }
+      nil
+    end
+
     private
 
     def http(uri, timeout)
       conn = Net::HTTP.new(uri.host, uri.port)
       conn.use_ssl = uri.scheme == "https"
+      conn.keep_alive_timeout = KEEP_ALIVE
       conn.open_timeout = timeout
       conn.read_timeout = timeout
       conn.write_timeout = timeout
       conn
+    end
+
+    # Run the block with an open connection to the service, then keep the
+    # connection open for a later request.
+    #
+    # A new connection costs a TCP and a TLS handshake, two round trips before
+    # the request goes out, so a solve that submits, polls and fetches would pay
+    # them on every request. Each request takes an idle connection, or opens
+    # one, and gives it back when its response has been read: threads sharing a
+    # client never share a connection. A connection the server has closed is
+    # reopened before it is written to (+Net::HTTP+ checks), and one whose
+    # request failed is closed, not kept.
+    def connected(uri, timeout)
+      conn = @idle_lock.synchronize { idle.pop } || http(uri, timeout).tap(&:start)
+      conn.read_timeout = timeout
+      conn.write_timeout = timeout
+      done = false
+      result = yield conn
+      done = true
+      result
+    ensure
+      if done
+        @idle_lock.synchronize { idle.push(conn) }
+      elsif conn&.started?
+        conn.finish
+      end
+    end
+
+    # The idle connections of this process. A process forked from the one that
+    # opened them shares their sockets, so it starts with none and leaves them
+    # to that process, neither writing to nor closing them. Called under
+    # +@idle_lock+.
+    def idle
+      unless @idle_pid == Process.pid
+        @idle = []
+        @idle_pid = Process.pid
+      end
+      @idle
     end
 
     # Coerce to encoded bytes: bytes pass through, a +Program+ is encoded, and a

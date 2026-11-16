@@ -69,10 +69,14 @@ module Quicopt
 
       # Encode a model (or an already-built +Program+) to bytes.
       #
+      # A model is written straight to bytes (+Bytes.program+): the same bytes
+      # as +PB::Program.encode(program(model))+, without building the message
+      # tree first.
+      #
       # @param model [Quicopt::Model, PB::Program]
       # @return [String] binary protobuf bytes
       def encode(model)
-        PB::Program.encode(model.is_a?(PB::Program) ? model : program(model))
+        model.is_a?(PB::Program) ? PB::Program.encode(model) : Bytes.program(model)
       end
 
       # Parse bytes back into a +Program+ — the inverse of +encode+, and the only
@@ -308,6 +312,255 @@ module Quicopt
         case kind
         when :zero then PB::ConSet.new(zero: PB::Zero.new)
         when :nonneg then PB::ConSet.new(nonneg: PB::Nonneg.new)
+        end
+      end
+    end
+
+    # Writes a model's +Program+ message straight to protobuf bytes.
+    #
+    # Building the message tree costs about six protobuf objects per term of a
+    # row (+c · x+ is an +Expression+ holding an +Apply+, which holds a constant
+    # +Expression+ and a variable +Expression+ with its +VarRef+ and +Index+),
+    # and on a model of 90,000 terms that was half of the whole build. Here
+    # each field is written as the bytes protobuf would write for it: the
+    # fields of a message in the order of their numbers, a message or a string
+    # as its length and its bytes, a number as 8 little-endian bytes, a field
+    # that holds its default value left out, and a +oneof+ case always written.
+    #
+    # A variable's term +c · x+ differs from every other term of that variable
+    # only in the 8 bytes of +c+, so the bytes before and after them are
+    # written once per variable (+Pieces+), and so are those of
+    # +c · indicator(x)+ and +c · step(x)+. Lookup tables, permutations,
+    # partitions and reads of them go through the message classes, and their
+    # bytes are embedded as they come. The tests check that the bytes equal
+    # +PB::Program.encode(Wire.program(model))+.
+    #
+    # @api private
+    module Bytes
+      # A constant +Expression+ holding 0, which a sum drops.
+      ZERO = ("\x09".b + [0.0].pack("E")).freeze
+      # +Constraint.set+ holding +ConSet+ +zero+ (+f = 0+) and +nonneg+ (+f ≥ 0+).
+      ZERO_SET = "\x12\x02\x0A\x00".b.freeze
+      NONNEG_SET = "\x12\x02\x12\x00".b.freeze
+      # The empty +Index+ of a reference to a flat variable, as +VarRef.index+.
+      EMPTY_INDEX = "\x12\x00".b.freeze
+      # +Apply.op+ of a sum, and the head of a constant among a sum's arguments.
+      PLUS = "\x0A\x01+".b.freeze
+      CONST_ARG = "\x12\x09".b.freeze
+      # +Apply.op+ of a product and the head of its constant argument, up to the
+      # constant's 8 bytes.
+      TIMES_CONST = "\x0A\x01*\x12\x09\x09".b.freeze
+
+      # The bytes of the terms of one factor (a variable, or a condition on
+      # one): +expr+, the factor's +Expression+; +arg+, the same as one of an
+      # +Apply+'s arguments, which is both +1 · factor+ in a sum and the second
+      # argument of +c · factor+; and the bytes of +c · factor+ before +c+, as
+      # an +Expression+ (+head+) and as an argument of a sum (+arg_head+).
+      Pieces = Struct.new(:expr, :arg, :head, :arg_head) do
+        # The pieces of the factor whose +Expression+ is +expr+.
+        def self.of(expr)
+          arg = Bytes.field(String.new(encoding: Encoding::BINARY), 2, expr).freeze
+          head = (+"\x22".b).tap { |h| Bytes.varint(h, TIMES_CONST.bytesize + 8 + arg.bytesize) } << TIMES_CONST
+          arg_head = (+"\x12".b).tap { |h| Bytes.varint(h, head.bytesize + 8 + arg.bytesize) } << head
+          new(expr.freeze, arg, head.freeze, arg_head.freeze)
+        end
+
+        # +c · factor+ as an +Expression+, +c+ given as its 8 bytes.
+        def term(number)
+          head + number + arg
+        end
+      end
+
+      # The cached bytes of one flat variable: its +VarRef+ and the +Pieces+ of
+      # the variable and of the conditions on it.
+      VarBytes = Struct.new(:ref, :pieces, :conditions)
+
+      class << self
+        # The bytes of +PB::Program.encode(Wire.program(model))+.
+        #
+        # @param model [Quicopt::Model]
+        # @return [String] binary protobuf bytes
+        def program(model)
+          vars = {} # variable name => VarBytes, written once
+          out = String.new(encoding: Encoding::BINARY)
+          model.tables.sort_by(&:name).each { |t| field(out, 3, PB::ParamTable.encode(Wire.param_table(t))) }
+          model.variables.each { |v| field(out, 4, var_decl(v)) }
+          field(out, 5, expression(model.objective, vars))
+          string(out, 6, model.sense)
+          model.constraints.each { |c| field(out, 7, constraint(c, vars)) }
+          (model.permutations + model.partitions).sort_by(&:name).each do |s|
+            field(out, 12, PB::StructureDecl.encode(Wire.structure_decl(s)))
+          end
+          model.blocks.sort_by(&:name).each do |b|
+            block = string(String.new(encoding: Encoding::BINARY), 1, b.name)
+            b.variables.each { |v| field(block, 2, variable(v.name, vars).ref) }
+            field(out, 13, block)
+          end
+          out
+        end
+
+        # Append field +number+ (below 16) holding the bytes of a message.
+        def field(out, number, bytes)
+          out << ((number << 3) | 2)
+          varint(out, bytes.bytesize)
+          out << bytes
+        end
+
+        # Append the base-128 varint of +n+, low group first.
+        def varint(out, n)
+          while n >= 0x80
+            out << ((n & 0x7F) | 0x80)
+            n >>= 7
+          end
+          out << n
+        end
+
+        private
+
+        # +Wire.expression+, as bytes: +sum+ of the terms, each written straight
+        # into the sum's +Apply+, so a sum of one term is that term.
+        def expression(expr, vars)
+          body = PLUS.dup
+          n = 0
+          single = nil # the first term, as an Expression: the whole sum when it is the only one
+          unless expr.constant.zero?
+            single = const(expr.constant)
+            body << CONST_ARG << single
+            n += 1
+          end
+          expr.linear.each do |f, c|
+            pieces = pieces(f, vars)
+            if pieces.nil?
+              term = scaled(c, factor(f, vars))
+              next if term == ZERO
+
+              field(body, 2, term)
+              single = term if n.zero?
+            elsif c == 1.0
+              body << pieces.arg
+              single = pieces.expr if n.zero?
+            else
+              number = [Wire.number(c)].pack("E")
+              body << pieces.arg_head << number << pieces.arg
+              single = pieces.term(number) if n.zero?
+            end
+            n += 1
+          end
+          expr.quadratic.each do |(a, b), c|
+            term = scaled(c, apply("*", [factor(a, vars), factor(b, vars)]))
+            field(body, 2, term)
+            single = term if n.zero?
+            n += 1
+          end
+          return ZERO if n.zero?
+          return single if n == 1
+
+          field(String.new(encoding: Encoding::BINARY), 4, body)
+        end
+
+        # The cached +Pieces+ of the factor +f+ when it is a variable or an
+        # +indicator+ or +step+ of a bare variable, else nil.
+        def pieces(f, vars)
+          return variable(f.name, vars).pieces if f.is_a?(Quicopt::Variable)
+          return nil unless f.is_a?(Condition) && %i[indicator step].include?(f.op)
+
+          arg = f.argument
+          return nil unless arg.constant.zero? && arg.quadratic.empty? && arg.linear.size == 1
+
+          x, c = arg.linear.first
+          return nil unless c == 1.0 && x.is_a?(Quicopt::Variable)
+
+          v = variable(x.name, vars)
+          v.conditions[f.op] ||= Pieces.of(apply(f.op.to_s, [v.pieces.expr]))
+        end
+
+        # The cached bytes of the flat variable +name+.
+        def variable(name, vars)
+          vars[name] ||= begin
+            ref = string(String.new(encoding: Encoding::BINARY), 1, name) << EMPTY_INDEX
+            VarBytes.new(ref.freeze, Pieces.of(field(String.new(encoding: Encoding::BINARY), 3, ref)), {})
+          end
+        end
+
+        # +Wire.factor+, as bytes. Reads of permutations, partitions and lookup
+        # tables go through the message classes.
+        def factor(f, vars)
+          case f
+          when Quicopt::Variable then variable(f.name, vars).pieces.expr
+          when Condition then condition(f, vars)
+          when Extremum then f.args.map { |a| expression(a, vars) }.reduce { |acc, e| apply(f.op.to_s, [acc, e]) }
+          else PB::Expression.encode(Wire.factor(f))
+          end
+        end
+
+        # +Wire.condition+, as bytes.
+        def condition(cond, vars)
+          arg = expression(cond.argument, vars)
+          case cond.op
+          when :indicator then apply("indicator", [arg])
+          when :step then apply("step", [arg])
+          when :near then apply("step", [apply("-", [const(cond.tol), apply("abs", [arg])])])
+          else raise Error, "unknown condition #{cond.op.inspect}"
+          end
+        end
+
+        # +Wire.constraint+, as bytes.
+        def constraint(con, vars)
+          f = expression(con.body, vars)
+          c = con.bound
+          out = String.new(encoding: Encoding::BINARY)
+          case con.sense
+          when :eq then field(out, 1, minus(f, c)) << ZERO_SET
+          when :ge then field(out, 1, minus(f, c)) << NONNEG_SET
+          when :le then field(out, 1, apply("-", [const(c), f])) << NONNEG_SET
+          else raise Error, "unknown constraint sense #{con.sense.inspect}"
+          end
+        end
+
+        # +Wire.var_decl+, as bytes. A domain is never 0 (+DOMAIN_UNSPECIFIED+),
+        # and a start of 0 is the default, left out.
+        def var_decl(variable)
+          out = string(String.new(encoding: Encoding::BINARY), 1, variable.name)
+          domain = variable.domain.is_a?(Integer) ? variable.domain : PB::Domain.resolve(variable.domain)
+          raise Error, "unknown domain #{variable.domain.inspect}" if domain.nil?
+
+          out << 0x18
+          varint(out, domain)
+          out << "\x22\x09\x09".b << [Wire.number(variable.lower)].pack("E")
+          out << "\x2A\x09\x09".b << [Wire.number(variable.upper)].pack("E")
+          start = Wire.number(variable.start)
+          out << 0x31 << [start].pack("E") unless start.zero?
+          out
+        end
+
+        # +f − c+ as bytes, dropping the additive zero (+Wire.minus+).
+        def minus(f, c)
+          c.zero? ? f : apply("-", [f, const(c)])
+        end
+
+        # +coef · expr+ as bytes, dropping a unit coefficient (+Wire.scaled+).
+        def scaled(coef, expr)
+          coef == 1.0 ? expr : apply("*", [const(coef), expr])
+        end
+
+        # A constant +Expression+, negative zero flattened (+Wire.const+).
+        def const(value)
+          "\x09".b << [Wire.number(value)].pack("E")
+        end
+
+        # The +Expression+ applying +op+ to the +Expression+ bytes +args+ (+Wire.apply+).
+        def apply(op, args)
+          body = string(String.new(encoding: Encoding::BINARY), 1, op)
+          args.each { |a| field(body, 2, a) }
+          field(String.new(encoding: Encoding::BINARY), 4, body)
+        end
+
+        # Append field +number+ (below 16) holding a string; an empty one is the
+        # default, left out.
+        def string(out, number, value)
+          return out if value.empty?
+
+          field(out, number, value.ascii_only? ? value : value.b)
         end
       end
     end

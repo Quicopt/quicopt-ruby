@@ -5,5 +5,5 @@
 module Quicopt
   # The gem version, tracking the client — not the wire schema, which is
   # versioned separately by its protobuf package (`quicopt.modeler.v1`).
-  VERSION = "0.4.0"
+  VERSION = "0.5.0"
 end

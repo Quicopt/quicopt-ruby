@@ -374,6 +374,12 @@ baked into the model.
 
 **Large models.** `solve(model, gzip: true)` compresses the request body.
 
+**Connections.** A client keeps its connection to the service open between
+requests, so a run of solves sets up a connection once instead of once per
+request. Threads may share one client: each request in flight uses a connection
+of its own. `client.close` closes the open connections, and the client stays
+usable.
+
 **Time limit.** The service chooses how long a solve may run. `time_limit:` sets that time instead, in seconds. A solver that proves its answer sooner still stops sooner; a search, which cannot prove it is done, may stop sooner too, once it stops finding better answers:
 
 ```ruby

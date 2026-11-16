@@ -549,6 +549,9 @@ module Quicopt
       @partitions = []
       @tables = []
       @blocks = []
+      # The name of the block each blocked variable is in, by identity, so that
+      # declaring a block costs time in its own size, not in the model's.
+      @block_of = {}.compare_by_identity
       @structured = {}
       @interned = {}
       @reads = 0
@@ -744,19 +747,24 @@ module Quicopt
       members = Array(vars)
       raise ArgumentError, "block #{nm.inspect} has no variables" if members.empty?
 
-      members.each_with_index do |v, k|
+      # The members checked so far, by identity. Nothing is recorded on the model
+      # until every member has passed, so a refused block leaves no trace.
+      seen = {}.compare_by_identity
+      members.each do |v|
         raise TypeError, "block #{nm.inspect}: a member is a variable, got #{v.class}" unless v.is_a?(Variable)
         raise ArgumentError, "variable #{v.name.inspect} belongs to a different Quicopt::Model" unless v.model.equal?(self)
-        raise ArgumentError, "variable #{v.name.inspect} is listed twice in block #{nm.inspect}" if members[0...k].any? { |u| u.equal?(v) }
-        if (owner = @blocks.find { |b| b.variables.any? { |u| u.equal?(v) } })
-          raise ArgumentError, "variable #{v.name.inspect} is already in block #{owner.name.inspect}"
+        raise ArgumentError, "variable #{v.name.inspect} is listed twice in block #{nm.inspect}" if seen.key?(v)
+        if (owner = @block_of[v])
+          raise ArgumentError, "variable #{v.name.inspect} is already in block #{owner.inspect}"
         end
         unless v.lower.finite? && v.upper.finite?
           raise ArgumentError, "variable #{v.name.inspect} has bounds [#{v.lower}, #{v.upper}]; " \
                                "a block's variables need finite bounds"
         end
+        seen[v] = true
       end
       block = Block.new(nm, members.dup.freeze)
+      members.each { |v| @block_of[v] = nm }
       @blocks << block
       block
     end
