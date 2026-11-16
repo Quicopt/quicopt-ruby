@@ -7,25 +7,51 @@
 # `rubygems` below. For a gem that does not exist yet, register it as a *pending*
 # trusted publisher; the first successful run then creates the gem.
 #
-# Release flow: bump lib/quicopt/version.rb, land it on main, then run this
-# workflow by hand. `rubygems/release-gem` runs `bundle exec rake release`, which
-# builds the gem, creates and pushes the `v<version>` tag, and pushes to
-# RubyGems. Note the direction — the tag is an *output* of the release, not the
-# trigger for it, so do not tag beforehand.
+# Release flow: bump lib/quicopt/version.rb, land it on main, then publish a
+# GitHub Release whose tag is `v<version>` on that commit:
 #
-# A published version can never be re-pushed (`gem yank` does not free the
-# number), so only dispatch this on a version you are willing to live with.
+#   gh release create v0.4.1 --target main --title "quicopt 0.4.1" --notes-file notes.md
+#
+# The `check` job refuses a tag that does not name the version in version.rb;
+# the tests then run on every supported Ruby. The `publish` job runs in the
+# `rubygems` environment, which requires a maintainer's approval in the Actions
+# tab before anything is pushed. A published version can never be re-pushed
+# (`gem yank` does not free the number), so the approval is the last chance to
+# stop it.
+#
+# `rubygems/release-gem` runs `bundle exec rake release`. Bundler's release task
+# tags the version only when the tag does not exist yet; here it always exists,
+# since the Release created it, so the task prints "Tag v… has already been
+# created", skips the git push and goes on to push the gem. The job gets no
+# write access to the repository, so it could not push a tag even if it tried.
 name: Publish to RubyGems
 
-# Manual only, deliberately. The obvious trigger — `release: [published]` —
-# cannot work with this action: publishing a GitHub Release creates the tag
-# first, and `rake release` then aborts with "Tag v… has already been created".
 on:
-  workflow_dispatch:
+  release:
+    types: [published]
 
 jobs:
+  check:
+    name: Check the tag against the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+      - name: The release tag names the version in lib/quicopt/version.rb
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(ruby -e 'require "./lib/quicopt/version"; print Quicopt::VERSION')
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Release tag $TAG does not match version $version in lib/quicopt/version.rb (expected v$version)"
+            exit 1
+          fi
+
   test:
     name: Test on Ruby ${{ matrix.ruby }}
+    needs: check
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -45,10 +71,8 @@ jobs:
     environment: rubygems
     permissions:
       id-token: write    # the OIDC token RubyGems Trusted Publishing verifies — no secrets
-      contents: write    # `rake release` pushes the version tag back to this repo
+      contents: read
     steps:
-      # persist-credentials: false — the action installs its own git credentials
-      # for the tag push, and checkout's stored token would otherwise win.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
