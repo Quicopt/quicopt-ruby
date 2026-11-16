@@ -339,13 +339,16 @@ module Quicopt
     module Bytes
       # A constant +Expression+ holding 0, which a sum drops.
       ZERO = ("\x09".b + [0.0].pack("E")).freeze
-      # +Constraint.set+ holding +ConSet+ +zero+ (+f = 0+) and +nonneg+ (+f ≥ 0+).
+      # +Constraint.set+ holding +ConSet+ +zero+ (+f = 0+).
       ZERO_SET = "\x12\x02\x0A\x00".b.freeze
+      # +Constraint.set+ holding +ConSet+ +nonneg+ (+f ≥ 0+).
       NONNEG_SET = "\x12\x02\x12\x00".b.freeze
       # The empty +Index+ of a reference to a flat variable, as +VarRef.index+.
       EMPTY_INDEX = "\x12\x00".b.freeze
-      # +Apply.op+ of a sum, and the head of a constant among a sum's arguments.
+      # +Apply.op+ of a sum.
       PLUS = "\x0A\x01+".b.freeze
+      # The head of a constant among a sum's arguments, up to the constant's 9
+      # bytes (its tag and 8 bytes of value).
       CONST_ARG = "\x12\x09".b.freeze
       # +Apply.op+ of a product and the head of its constant argument, up to the
       # constant's 8 bytes.
